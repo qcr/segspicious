@@ -8,11 +8,13 @@ The unit of comparison is the **candidate**: a complete pipeline from input imag
 
 ## Uncertainty Output
 
-Every candidate produces an `UncertaintyOutput` — a flat dataclass with one required field and five optional fields:
+Every candidate produces an `UncertaintyOutput` — a dataclass that extends `SegmentationOutput` (see `segmentation_design.md`) with five optional uncertainty fields. UQ candidates inherit `prediction` and are automatically evaluated on segmentation tests as well.
 
 ```
-UncertaintyOutput:
+SegmentationOutput:
     prediction:              (H, W)          # always present — argmax class map
+
+UncertaintyOutput(SegmentationOutput):
     class_probs:             (H, W, C) | -   # class probability vector
     predictive_uncertainty:  (H, W)    | -   # total uncertainty (responds to all sources)
     aleatoric_uncertainty:   (H, W)    | -   # irreducible data ambiguity
@@ -22,7 +24,7 @@ UncertaintyOutput:
 
 ### Field Semantics
 
-- **prediction** — the model's best-guess class per pixel.
+- **prediction** — inherited from `SegmentationOutput`. The model's best-guess class per pixel.
 - **class_probs** — a probability distribution over classes per pixel. Required for calibration evaluation. Must be interpretable as probabilities (sums to 1, non-negative).
 - **predictive_uncertainty** — total uncertainty scalar. High when the model is uncertain for any reason (ambiguous data, unseen input, model ignorance). Typically entropy of the predictive distribution.
 - **aleatoric_uncertainty** — uncertainty due to inherent ambiguity in the data. Cannot be reduced by collecting more training data. Boundary regions, label noise, overlapping classes.
