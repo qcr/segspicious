@@ -1,0 +1,13 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "segspicious"
+version = "0.1.0"
+description = "Protocols, modifiers, and metrics for segmentation UQ benchmarking."
+requires-python = ">= 3.12"
+dependencies = []
+
+[tool.pytest.ini_options]
+testpaths = ["segspicious/tests"]
