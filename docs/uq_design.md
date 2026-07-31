@@ -8,24 +8,26 @@ The unit of comparison is the **candidate**: a complete pipeline from input imag
 
 ## Uncertainty Output
 
-Every candidate produces an `UncertaintyOutput` — a dataclass that extends `SegmentationOutput` (see `segmentation_design.md`) with five optional uncertainty fields. UQ candidates inherit `prediction` and are automatically evaluated on segmentation tests as well.
+Every candidate's `predict()` method receives a batch of images as a `(B, C, H, W)` tensor and returns an `UncertaintyOutput` — a dataclass that extends `SegmentationOutput` (see `segmentation_design.md`) with five optional uncertainty fields. UQ candidates inherit `prediction` and are automatically evaluated on segmentation tests as well.
+
+All tensors follow PyTorch conventions: channels-first, with a batch dimension.
 
 ```
 SegmentationOutput:
-    prediction:              (H, W)          # always present — argmax class map
+    prediction:              (B, H, W)          # always present — argmax class map
 
 UncertaintyOutput(SegmentationOutput):
-    class_probs:             (H, W, C) | -   # class probability vector
-    predictive_uncertainty:  (H, W)    | -   # total uncertainty (responds to all sources)
-    aleatoric_uncertainty:   (H, W)    | -   # irreducible data ambiguity
-    epistemic_uncertainty:   (H, W)    | -   # reducible model ignorance
-    ood_score:               (H, W)    | -   # how out-of-distribution the input is
+    class_probs:             (B, C, H, W) | -   # class probability vector (channels-first)
+    predictive_uncertainty:  (B, H, W)    | -   # total uncertainty (responds to all sources)
+    aleatoric_uncertainty:   (B, H, W)    | -   # irreducible data ambiguity
+    epistemic_uncertainty:   (B, H, W)    | -   # reducible model ignorance
+    ood_score:               (B, H, W)    | -   # how out-of-distribution the input is
 ```
 
 ### Field Semantics
 
 - **prediction** — inherited from `SegmentationOutput`. The model's best-guess class per pixel.
-- **class_probs** — a probability distribution over classes per pixel. Required for calibration evaluation. Must be interpretable as probabilities (sums to 1, non-negative).
+- **class_probs** — a probability distribution over classes per pixel. `(B, C, H, W)` channels-first, following PyTorch convention. Required for calibration evaluation. Must be interpretable as probabilities (sums to 1 along C, non-negative).
 - **predictive_uncertainty** — total uncertainty scalar. High when the model is uncertain for any reason (ambiguous data, unseen input, model ignorance). Typically entropy of the predictive distribution.
 - **aleatoric_uncertainty** — uncertainty due to inherent ambiguity in the data. Cannot be reduced by collecting more training data. Boundary regions, label noise, overlapping classes.
 - **epistemic_uncertainty** — uncertainty due to limited training data or model capacity. Can be reduced by training on more data. Measures what the model doesn't know.
@@ -43,19 +45,22 @@ The candidate author knows what their method measures. The framework trusts that
 
 ## Evaluation Tests
 
-Each test declares which fields it requires. The framework checks compatibility and runs all valid (candidate, test) pairings.
+Each test declares which fields it requires. The framework checks compatibility and runs all valid (candidate, test) pairings. All metrics use torchmetrics and torch-uncertainty.metrics, which accumulate across batches via `.update()` / `.compute()`.
 
 ### OoD Detection
 
-Separates in-distribution pixels from out-of-distribution pixels.
+Separates in-distribution pixels from out-of-distribution pixels. OoD ground truth is encoded in the label tensor: pixels with `label >= num_classes` are OoD (see `experiment_design.md`). The benchmark runner derives binary OoD targets from this convention and passes `(ood_scores, binary_labels)` to the metrics.
 
 | | |
 |---|---|
 | **Accepts** | `predictive_uncertainty`, `epistemic_uncertainty`, `ood_score` |
-| **Ground truth** | Binary OoD mask `(H, W)` |
+| **Ground truth** | Derived from label tensor: `label >= num_classes` → OoD |
 | **Metrics** | AUROC, AUPR, FPR@95TPR |
+| **Implementation** | `torch-uncertainty` `SegmentationBinaryAUROC`, `SegmentationBinaryAveragePrecision`, `SegmentationFPR95` |
 
 Runs independently for each populated field — a candidate with both `epistemic_uncertainty` and `ood_score` produces two sets of metrics.
+
+The torch-uncertainty segmentation OoD metrics are **image-averaged**: AUROC / FPR95 is computed per image then averaged across the batch. This is the convention in the dense OoD-detection literature and behaves better than computing over flattened pixels when image sizes or OoD prevalences vary.
 
 ### Failure Detection
 
@@ -64,7 +69,7 @@ Detects pixels where the model's prediction is wrong.
 | | |
 |---|---|
 | **Accepts** | `predictive_uncertainty`, `aleatoric_uncertainty`, `epistemic_uncertainty`, `ood_score` |
-| **Ground truth** | Class labels `(H, W)` (binary error mask derived from `prediction ≠ label`) |
+| **Ground truth** | Class labels `(B, H, W)` (binary error mask derived from `prediction ≠ label`) |
 | **Metrics** | AUROC, AUPR, FPR@95TPR |
 
 ### Selective Prediction (Risk-Coverage)
@@ -74,8 +79,9 @@ Measures accuracy improvement when the model abstains on uncertain pixels.
 | | |
 |---|---|
 | **Accepts** | `predictive_uncertainty`, `aleatoric_uncertainty`, `epistemic_uncertainty`, `ood_score` |
-| **Ground truth** | Class labels `(H, W)` |
+| **Ground truth** | Class labels `(B, H, W)` |
 | **Metrics** | AURC, E-AURC |
+| **Implementation** | `torch-uncertainty` `AURC`, `AUGRC` |
 
 ### Calibration
 
@@ -84,8 +90,9 @@ Evaluates whether predicted probabilities match empirical correctness frequency.
 | | |
 |---|---|
 | **Accepts** | `class_probs` |
-| **Ground truth** | Class labels `(H, W)` |
+| **Ground truth** | Class labels `(B, H, W)` |
 | **Metrics** | ECE, classwise-ECE, Brier score, NLL |
+| **Implementation** | `torchmetrics` `CalibrationError`, `torch-uncertainty` `BrierScore`, `CategoricalNLL` |
 
 ### Active Learning
 
