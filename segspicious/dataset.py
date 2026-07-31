@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Protocol, runtime_checkable
 
 import numpy as np
+
+
+class Split(Enum):
+    """Dataset split."""
+
+    TRAIN = "train"
+    VAL = "val"
+    TEST = "test"
 
 
 @dataclass
