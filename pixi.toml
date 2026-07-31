@@ -2,14 +2,17 @@
 authors = ["Alistair English <hello@alistairenglish.com>"]
 channels = ["conda-forge"]
 name = "segspicious"
-platforms = ["linux-64"]
+platforms = [{ platform = "linux-64", cuda = "12" }]
 version = "0.1.0"
 
 [dependencies]
 python = ">=3.12"
 numpy = "*"
-pytorch = "*"
+pytorch-gpu = "*"
+cuda-cudart-dev = "*"
 torchvision = "*"
+tqdm = "*"
+matplotlib = "*"
 hatchling = "*"
 
 [pypi-dependencies]

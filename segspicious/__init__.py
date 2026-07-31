@@ -2,6 +2,7 @@
 
 from segspicious.candidate import Candidate, SegmentationOutput, UncertaintyOutput
 from segspicious.dataset import SegmentationDataset, SegmentationSample, Split
+from segspicious.torch_adapter import TorchDatasetAdapter
 
 __all__ = [
     "Candidate",
@@ -9,5 +10,6 @@ __all__ = [
     "SegmentationOutput",
     "SegmentationSample",
     "Split",
+    "TorchDatasetAdapter",
     "UncertaintyOutput",
 ]
