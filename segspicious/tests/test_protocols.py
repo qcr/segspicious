@@ -6,12 +6,8 @@ from pathlib import Path
 
 import numpy as np
 
-from segspicious.protocols import Candidate, SegmentationDataset
-from segspicious.types import (
-    SegmentationOutput,
-    SegmentationSample,
-    UncertaintyOutput,
-)
+from segspicious.candidate import Candidate, SegmentationOutput, UncertaintyOutput
+from segspicious.dataset import SegmentationDataset, SegmentationSample
 
 # ---------------------------------------------------------------------------
 # Minimal concrete implementations used only for testing

@@ -1,12 +1,10 @@
 """Tests for core data types."""
 
 import numpy as np
+import pytest
 
-from segspicious.types import (
-    SegmentationOutput,
-    SegmentationSample,
-    UncertaintyOutput,
-)
+from segspicious.candidate import SegmentationOutput, UncertaintyOutput
+from segspicious.dataset import SegmentationSample
 
 
 class TestSegmentationOutput:
@@ -19,6 +17,11 @@ class TestSegmentationOutput:
         pred = np.zeros((4, 4), dtype=int)
         out = SegmentationOutput(prediction=pred)
         assert out.prediction.shape == (4, 4)
+
+    def test_height_width_properties(self):
+        out = SegmentationOutput(prediction=np.zeros((10, 20), dtype=int))
+        assert out.height == 10
+        assert out.width == 20
 
 
 class TestUncertaintyOutput:
@@ -67,6 +70,24 @@ class TestUncertaintyOutput:
         assert out.epistemic_uncertainty.shape == (h, w)
         assert out.ood_score.shape == (h, w)
 
+    def test_num_classes_from_class_probs(self):
+        out = UncertaintyOutput(
+            prediction=np.zeros((4, 4), dtype=int),
+            class_probs=np.ones((4, 4, 7)) / 7,
+        )
+        assert out.num_classes == 7
+
+    def test_num_classes_none_when_no_probs(self):
+        out = UncertaintyOutput(prediction=np.zeros((4, 4), dtype=int))
+        assert out.num_classes is None
+
+    def test_spatial_mismatch_raises(self):
+        with pytest.raises(ValueError, match="predictive_uncertainty"):
+            UncertaintyOutput(
+                prediction=np.zeros((4, 4), dtype=int),
+                predictive_uncertainty=np.zeros((3, 4)),
+            )
+
 
 class TestSegmentationSample:
     def test_construction(self):
@@ -87,3 +108,12 @@ class TestSegmentationSample:
         sample = SegmentationSample(image=img, labels=labels, ood_mask=ood)
         assert sample.ood_mask is not None
         assert sample.ood_mask.sum() == 4
+
+    def test_height_width_num_channels(self):
+        sample = SegmentationSample(
+            image=np.zeros((16, 32, 3), dtype=np.uint8),
+            labels=np.zeros((16, 32), dtype=int),
+        )
+        assert sample.height == 16
+        assert sample.width == 32
+        assert sample.num_channels == 3

@@ -1,11 +1,7 @@
 "segspicious — protocols, modifiers, and metrics for segmentation UQ benchmarking."
 
-from segspicious.protocols import Candidate, SegmentationDataset
-from segspicious.types import (
-    SegmentationOutput,
-    SegmentationSample,
-    UncertaintyOutput,
-)
+from segspicious.candidate import Candidate, SegmentationOutput, UncertaintyOutput
+from segspicious.dataset import SegmentationDataset, SegmentationSample
 
 __all__ = [
     "Candidate",
