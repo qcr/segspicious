@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import bisect
 import random
 from collections.abc import Callable, Sequence
 
@@ -66,6 +67,12 @@ class _Subset(SegmentationDataset):
     def __getitem__(self, index: int) -> tuple[Tensor, Tensor]:
         return self._dataset[self._indices[index]]
 
+    def get_labels(self, index: int) -> Tensor:
+        return self._dataset.get_labels(self._indices[index])
+
+    def get_classes_present(self, index: int) -> frozenset[int]:
+        return self._dataset.get_classes_present(self._indices[index])
+
 
 class _ConcatDataset(SegmentationDataset):
     """Concatenation of multiple datasets. Validates and propagates metadata."""
@@ -92,7 +99,15 @@ class _ConcatDataset(SegmentationDataset):
                 )
 
         self._first = first
+        self._datasets = list(datasets)
         self._concat = _TorchConcatDataset(datasets)
+
+    def _resolve_index(self, index: int) -> tuple[SegmentationDataset, int]:
+        """Map a global index to (dataset, local_index)."""
+        sizes = self._concat.cumulative_sizes
+        ds_idx = bisect.bisect_right(sizes, index)
+        local = index if ds_idx == 0 else index - sizes[ds_idx - 1]
+        return self._datasets[ds_idx], local
 
     @property
     def num_classes(self) -> int:
@@ -115,6 +130,14 @@ class _ConcatDataset(SegmentationDataset):
 
     def __getitem__(self, index: int) -> tuple[Tensor, Tensor]:
         return self._concat[index]
+
+    def get_labels(self, index: int) -> Tensor:
+        ds, local = self._resolve_index(index)
+        return ds.get_labels(local)
+
+    def get_classes_present(self, index: int) -> frozenset[int]:
+        ds, local = self._resolve_index(index)
+        return ds.get_classes_present(local)
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +185,13 @@ class _RemappedDataset(SegmentationDataset):
         image, labels = self._dataset[index]
         return image, self._remap[labels]
 
+    def get_labels(self, index: int) -> Tensor:
+        return self._remap[self._dataset.get_labels(index)]
+
+    def get_classes_present(self, index: int) -> frozenset[int]:
+        inner = self._dataset.get_classes_present(index)
+        return frozenset(self._remap[c].item() for c in inner)
+
 
 # ---------------------------------------------------------------------------
 # Functional API
@@ -201,8 +231,36 @@ def filter_samples(
     """Keep only samples where ``predicate(image, labels)`` is True.
 
     Scans the full dataset at construction time to compute kept indices.
+
+    .. note::
+
+       This loads every sample (image + labels) to evaluate the
+       predicate.  If your predicate only inspects labels, use
+       :func:`filter_by_labels` instead.  If it only needs the *set* of
+       classes present, prefer :func:`select_classes` /
+       :func:`hold_out_classes` which use
+       :meth:`~SegmentationDataset.get_classes_present` and can be
+       nearly free on datasets that cache class metadata.
     """
     indices = [i for i in range(len(dataset)) if predicate(*dataset[i])]
+    return _Subset(dataset, indices=indices)
+
+
+def filter_by_labels(
+    dataset: SegmentationDataset,
+    predicate: Callable[[Tensor], bool],
+) -> SegmentationDataset:
+    """Keep only samples where ``predicate(labels)`` is True.
+
+    Like :func:`filter_samples` but the predicate receives only the
+    label tensor.  Uses :meth:`~SegmentationDataset.get_labels` so
+    disk-backed datasets can skip image decoding during the scan.
+    """
+    indices = [
+        i
+        for i in range(len(dataset))
+        if predicate(dataset.get_labels(i))
+    ]
     return _Subset(dataset, indices=indices)
 
 
@@ -244,12 +302,12 @@ def select_classes(
                     f"[0, {dataset.num_classes})."
                 )
 
-    return filter_samples(
-        dataset,
-        predicate=lambda _img, lbl: any(
-            (lbl == idx).any() for idx in class_indices
-        ),
-    )
+    indices = [
+        i
+        for i in range(len(dataset))
+        if class_indices & dataset.get_classes_present(i)
+    ]
+    return _Subset(dataset, indices=indices)
 
 
 def mark_as_ood(
@@ -365,12 +423,12 @@ def hold_out_classes(
                     f"[0, {dataset.num_classes})."
                 )
 
-    return filter_samples(
-        dataset,
-        predicate=lambda _img, lbl: not any(
-            (lbl == idx).any() for idx in class_indices
-        ),
-    )
+    indices = [
+        i
+        for i in range(len(dataset))
+        if not (class_indices & dataset.get_classes_present(i))
+    ]
+    return _Subset(dataset, indices=indices)
 
 
 def hold_out_ood(
@@ -389,12 +447,15 @@ def hold_out_ood(
     """
     num_cls = dataset.num_classes
     ignore = dataset.ignore_index
-    return filter_samples(
-        dataset,
-        predicate=lambda _img, lbl: not (
-            (lbl >= num_cls) & (lbl != ignore)
-        ).any(),
-    )
+    indices = [
+        i
+        for i in range(len(dataset))
+        if not any(
+            c >= num_cls and c != ignore
+            for c in dataset.get_classes_present(i)
+        )
+    ]
+    return _Subset(dataset, indices=indices)
 
 
 def remap_classes(
@@ -473,6 +534,7 @@ def remap_classes(
 
 __all__ = [
     "concat_datasets",
+    "filter_by_labels",
     "filter_samples",
     "hold_out_classes",
     "hold_out_ood",

@@ -74,3 +74,6 @@ class SyntheticDataset(SegmentationDataset):
 
     def __getitem__(self, index: int) -> tuple[Tensor, Tensor]:
         return self._images[index], self._labels[index]
+
+    def get_labels(self, index: int) -> Tensor:
+        return self._labels[index]

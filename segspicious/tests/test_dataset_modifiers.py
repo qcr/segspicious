@@ -6,6 +6,7 @@ import torch
 from segspicious.datasets import (
     SegmentationDataset,
     concat_datasets,
+    filter_by_labels,
     filter_samples,
     hold_out_classes,
     hold_out_ood,
@@ -119,6 +120,113 @@ class TestConcatDatasets:
         )
         with pytest.raises(ValueError, match="class_names"):
             concat_datasets([ds1, ds2])
+
+
+# ── get_labels / get_classes_present ─────────────────────────────────────
+
+
+class TestGetLabels:
+    def test_base_dataset(self):
+        ds = SyntheticDataset(num_samples=5, seed=0)
+        for i in range(len(ds)):
+            _, expected = ds[i]
+            assert ds.get_labels(i).equal(expected)
+
+    def test_through_subset(self):
+        ds = SyntheticDataset(num_samples=10, seed=0)
+        sub = subset(ds, indices=[2, 5, 8])
+        for i in range(len(sub)):
+            _, expected = sub[i]
+            assert sub.get_labels(i).equal(expected)
+
+    def test_through_remapped(self):
+        ds = SyntheticDataset(num_classes=5, num_samples=5, seed=0)
+        remapped = mark_as_ood(ds, classes=["class_3"])
+        for i in range(len(remapped)):
+            _, expected = remapped[i]
+            assert remapped.get_labels(i).equal(expected)
+
+    def test_through_concat(self):
+        ds1 = SyntheticDataset(num_samples=3, seed=0)
+        ds2 = SyntheticDataset(num_samples=4, seed=1)
+        cat = concat_datasets([ds1, ds2])
+        for i in range(len(cat)):
+            _, expected = cat[i]
+            assert cat.get_labels(i).equal(expected)
+
+
+class TestGetClassesPresent:
+    def test_base_dataset(self):
+        ds = SyntheticDataset(num_classes=3, num_samples=5, height=2, width=2)
+        ds._labels[0] = 0  # only class_0
+        assert ds.get_classes_present(0) == frozenset({0})
+
+    def test_multiple_classes(self):
+        ds = SyntheticDataset(num_classes=3, num_samples=5, height=2, width=2)
+        ds._labels[0] = torch.tensor([[0, 1], [2, 0]])
+        assert ds.get_classes_present(0) == frozenset({0, 1, 2})
+
+    def test_through_remapped(self):
+        ds = SyntheticDataset(num_classes=4, num_samples=3, height=2, width=2)
+        ds._labels[0] = torch.tensor([[0, 1], [2, 3]])
+        # mark class_1 as OoD: kept 0→0, 2→1, 3→2; OoD 1→3
+        remapped = mark_as_ood(ds, classes=["class_1"])
+        classes = remapped.get_classes_present(0)
+        assert classes == frozenset({0, 1, 2, 3})
+
+    def test_through_subset(self):
+        ds = SyntheticDataset(num_classes=3, num_samples=5, height=2, width=2)
+        ds._labels[0] = 0
+        ds._labels[2] = torch.tensor([[1, 2], [0, 1]])
+        sub = subset(ds, indices=[0, 2])
+        assert sub.get_classes_present(0) == frozenset({0})
+        assert sub.get_classes_present(1) == frozenset({0, 1, 2})
+
+    def test_returns_frozenset(self):
+        ds = SyntheticDataset(num_classes=3, num_samples=1)
+        result = ds.get_classes_present(0)
+        assert isinstance(result, frozenset)
+
+
+# ── filter_by_labels ─────────────────────────────────────────────────────
+
+
+class TestFilterByLabels:
+    def test_always_true(self):
+        ds = SyntheticDataset(num_samples=5)
+        filtered = filter_by_labels(ds, predicate=lambda lbl: True)
+        assert len(filtered) == 5
+
+    def test_always_false(self):
+        filtered = filter_by_labels(
+            SyntheticDataset(num_samples=5),
+            predicate=lambda lbl: False,
+        )
+        assert len(filtered) == 0
+
+    def test_label_predicate(self):
+        ds = SyntheticDataset(num_classes=3, num_samples=5, height=2, width=2)
+        ds._labels[0] = 0
+        ds._labels[1] = torch.tensor([[2, 0], [1, 2]])
+        ds._labels[2] = 1
+        ds._labels[3] = torch.tensor([[0, 2], [2, 1]])
+        ds._labels[4] = torch.tensor([[0, 1], [1, 0]])
+        # Keep only samples containing class 2
+        filtered = filter_by_labels(
+            ds, predicate=lambda lbl: (lbl == 2).any()
+        )
+        assert len(filtered) == 2  # samples 1 and 3
+
+    def test_metadata_propagated(self):
+        ds = SyntheticDataset(num_classes=6)
+        filtered = filter_by_labels(ds, predicate=lambda lbl: True)
+        assert filtered.num_classes == ds.num_classes
+        assert filtered.class_names == ds.class_names
+        assert filtered.ignore_index == ds.ignore_index
+
+    def test_returns_segmentation_dataset(self):
+        filtered = filter_by_labels(SyntheticDataset(), predicate=lambda lbl: True)
+        assert isinstance(filtered, SegmentationDataset)
 
 
 # ── filter_samples ───────────────────────────────────────────────────────

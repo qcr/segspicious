@@ -55,6 +55,31 @@ class SegmentationDataset(Dataset):
     @abstractmethod
     def __getitem__(self, index: int) -> tuple[Tensor, Tensor]: ...
 
+    # -- optional overrides ------------------------------------------------
+
+    def get_labels(self, index: int) -> Tensor:
+        """Return only the label tensor for sample *index*.
+
+        The default implementation calls ``__getitem__`` and discards the
+        image.  Disk-backed datasets should override this to avoid
+        decoding the image when only labels are needed (e.g. during
+        filter scans).
+        """
+        _, labels = self[index]
+        return labels
+
+    def get_classes_present(self, index: int) -> frozenset[int]:
+        """Return the set of class indices present in sample *index*.
+
+        The default implementation calls :meth:`get_labels` and computes
+        ``torch.unique``.  Datasets can override this with a much
+        cheaper implementation — e.g. a cached lookup table built once
+        from label metadata — to avoid decoding label images entirely
+        during filter scans.
+        """
+        labels = self.get_labels(index)
+        return frozenset(labels.unique().tolist())
+
     # -- derived (free for all subclasses) ---------------------------------
 
     @property

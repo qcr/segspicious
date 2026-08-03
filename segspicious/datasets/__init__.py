@@ -3,6 +3,7 @@
 from segspicious.datasets.base import SegmentationDataset, Split
 from segspicious.datasets.modifiers import (
     concat_datasets,
+    filter_by_labels,
     filter_samples,
     hold_out_classes,
     hold_out_ood,
@@ -16,6 +17,7 @@ __all__ = [
     "SegmentationDataset",
     "Split",
     "concat_datasets",
+    "filter_by_labels",
     "filter_samples",
     "hold_out_classes",
     "hold_out_ood",
