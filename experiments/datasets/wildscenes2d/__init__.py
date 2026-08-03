@@ -11,7 +11,7 @@ from pathlib import Path
 
 import torch
 from torch import Tensor
-from torchvision.io import decode_image, ImageReadMode
+from torchvision.io import ImageReadMode, decode_image
 
 from segspicious.datasets import SegmentationDataset, Split
 
@@ -73,15 +73,14 @@ def _load_split_csv(split: Split) -> list[tuple[str, str]]:
     the dataset root (which *is* the ``WildScenes2d/`` directory).
     """
     csv_name = f"{split.value}.csv"
-    ref = resources.files(__package__) / "wildscenes2d_splits" / csv_name
-    with resources.as_file(ref) as csv_path:
-        with open(csv_path, newline="") as f:
-            reader = csv.DictReader(f)
-            pairs: list[tuple[str, str]] = []
-            for row in reader:
-                im = row["im_path"].removeprefix("WildScenes2d/")
-                lbl = row["label_path"].removeprefix("WildScenes2d/")
-                pairs.append((im, lbl))
+    ref = resources.files(__package__) / "splits" / csv_name
+    with resources.as_file(ref) as csv_path, open(csv_path, newline="") as f:
+        reader = csv.DictReader(f)
+        pairs: list[tuple[str, str]] = []
+        for row in reader:
+            im = row["im_path"].removeprefix("WildScenes2d/")
+            lbl = row["label_path"].removeprefix("WildScenes2d/")
+            pairs.append((im, lbl))
     return pairs
 
 
@@ -139,9 +138,7 @@ class Wildscenes2dDataset(SegmentationDataset):
                 index = json.load(f)
 
         # Find samples not yet in the cache.
-        missing = [
-            (_im, lbl) for _im, lbl in self._pairs if lbl not in index
-        ]
+        missing = [(_im, lbl) for _im, lbl in self._pairs if lbl not in index]
 
         if missing:
             log = logging.getLogger(__name__)
@@ -164,8 +161,7 @@ class Wildscenes2dDataset(SegmentationDataset):
             except OSError:
                 log = logging.getLogger(__name__)
                 log.warning(
-                    "Could not write class index cache to %s; "
-                    "will rebuild next time.",
+                    "Could not write class index cache to %s; will rebuild next time.",
                     cache_file,
                 )
 
@@ -194,9 +190,10 @@ class Wildscenes2dDataset(SegmentationDataset):
     def __getitem__(self, index: int) -> tuple[Tensor, Tensor]:
         im_rel, lbl_rel = self._pairs[index]
 
-        image = decode_image(
-            str(self._root / im_rel), mode=ImageReadMode.RGB
-        ).float() / 255.0
+        image = (
+            decode_image(str(self._root / im_rel), mode=ImageReadMode.RGB).float()
+            / 255.0
+        )
 
         raw_labels = decode_image(
             str(self._root / lbl_rel), mode=ImageReadMode.GRAY
@@ -208,9 +205,9 @@ class Wildscenes2dDataset(SegmentationDataset):
     def get_labels(self, index: int) -> Tensor:
         """Decode only the label PNG, skipping the RGB image."""
         _im_rel, lbl_rel = self._pairs[index]
-        raw = decode_image(
-            str(self._root / lbl_rel), mode=ImageReadMode.GRAY
-        ).squeeze(0)
+        raw = decode_image(str(self._root / lbl_rel), mode=ImageReadMode.GRAY).squeeze(
+            0
+        )
         return _LABEL_REMAP[raw.long()]
 
     def get_classes_present(self, index: int) -> frozenset[int]:
