@@ -236,6 +236,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/typing_extensions-4.16.0-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2026c-h151e31d_0.conda
       - pypi: ./
+      - pypi: ./experiments
       - pypi: https://files.pythonhosted.org/packages/2a/09/f8d8f8f31e4483c10a906437b4ce31bdf3d6d417b73fe33f1a8b59e34228/einops-0.8.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/37/9d/eaab456ef6d7f334a43e7c080989d4b0f4c39d6d68f31e60a6c158efa551/torch_uncertainty-0.13.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/82/3b/64d4899d73f91ba49a8c18a8ff3f0ea8f1c1d75481760df8c68ef5235bf5/rich-15.0.0-py3-none-any.whl
@@ -3720,6 +3721,11 @@ packages:
   timestamp: 1784250406640
 - pypi: ./
   name: segspicious
+  requires_python: '>=3.12'
+- pypi: ./experiments
+  name: segspicious-experiments
+  requires_dist:
+  - segspicious
   requires_python: '>=3.12'
 - pypi: https://files.pythonhosted.org/packages/2a/09/f8d8f8f31e4483c10a906437b4ce31bdf3d6d417b73fe33f1a8b59e34228/einops-0.8.2-py3-none-any.whl
   name: einops

@@ -18,6 +18,7 @@ torchmetrics = ">=1.9.0,<2"
 
 [pypi-dependencies]
 segspicious = { path = ".", editable = true }
+segspicious-experiments = { path = "experiments", editable = true }
 torch-uncertainty = ">=0.13.0, <0.14"
 lightning = ">=2.6.5, <3"
 rich = ">=15.0.0, <16"

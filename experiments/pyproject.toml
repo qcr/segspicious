@@ -1,0 +1,13 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "segspicious-experiments"
+version = "0.1.0"
+description = "Concrete datasets, candidates, and experiment scripts for segspicious."
+requires-python = ">= 3.12"
+dependencies = ["segspicious"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["datasets", "candidates"]
