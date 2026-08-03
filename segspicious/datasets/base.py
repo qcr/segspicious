@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 from abc import abstractmethod
+from enum import Enum
 
 from torch import Tensor
 from torch.utils.data import Dataset
+
+
+class Split(Enum):
+    """Standard dataset splits."""
+
+    TRAIN = "train"
+    VAL = "val"
+    TEST = "test"
 
 
 class SegmentationDataset(Dataset):
