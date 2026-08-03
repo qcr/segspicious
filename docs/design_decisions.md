@@ -47,7 +47,7 @@ PyTorch's `Subset` and `ConcatDataset` don't know about `num_classes`, `class_na
 The original `predict(image: np.ndarray) → SegmentationOutput` was single-image. We switched to `predict(images: Tensor) → SegmentationOutput` operating on `(B, C, H, W)` batches because:
 
 - GPU inference is vastly more efficient in batches.
-- The benchmark runner already iterates a DataLoader producing batches — calling predict per-image inside that loop is the anti-pattern DataLoader exists to solve.
+- The eval loop already iterates a DataLoader producing batches — calling predict per-image inside that loop is the anti-pattern DataLoader exists to solve.
 - torchmetrics are designed for batched `.update()` calls — the batch flows straight from predict into metric accumulation with no per-sample loop.
 
 ## Train Gets a Dataset, Predict Gets Tensors
@@ -55,7 +55,7 @@ The original `predict(image: np.ndarray) → SegmentationOutput` was single-imag
 There's an asymmetry in the candidate interface:
 
 - **`train(dataset: SegmentationDataset)`** — the candidate receives a Dataset and constructs its own DataLoader internally. This is because batch size, shuffle strategy, augmentation, and sampler are all training decisions that affect results. The candidate must own them.
-- **`predict(images: Tensor)`** — the candidate receives raw batched tensors. The benchmark runner owns the eval DataLoader because batch size for inference is a system/memory concern, not a method decision. The candidate just processes whatever batch it receives.
+- **`predict(images: Tensor)`** — the candidate receives raw batched tensors. The experiment script owns the eval DataLoader because batch size for inference is a system/memory concern, not a method decision. The candidate just processes whatever batch it receives.
 
 This matches the PyTorch Lightning pattern: `training_step` owns data loading via the DataModule, while `predict_step` just receives a batch from the caller.
 
@@ -66,7 +66,7 @@ Rather than implementing metrics ourselves, we use:
 - **torchmetrics** — `Accuracy`, `JaccardIndex` / `MeanIntersectionOverUnion` for segmentation. `CalibrationError` for ECE.
 - **torch-uncertainty.metrics** — `SegmentationBinaryAUROC`, `SegmentationBinaryAveragePrecision`, `SegmentationFPR95` for OoD detection. `BrierScore`, `CategoricalNLL` for calibration. `AURC`, `AUGRC` for selective prediction.
 
-These are all designed for the `.update(preds, targets)` per batch, `.compute()` at end pattern. The benchmark runner calls `.update()` on each batch and `.compute()` once after exhausting the DataLoader. No need to hold all predictions in memory.
+These are all designed for the `.update(preds, targets)` per batch, `.compute()` at end pattern. The experiment script calls `.update()` on each batch and `.compute()` once after exhausting the DataLoader. No need to hold all predictions in memory.
 
 The torch-uncertainty segmentation OoD metrics are **image-averaged** (AUROC computed per image then averaged), which is the convention in the dense OoD-detection literature.
 

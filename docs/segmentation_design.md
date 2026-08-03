@@ -1,10 +1,10 @@
 # Segmentation Design
 
-Benchmarking semantic segmentation performance.
+Evaluating semantic segmentation performance.
 
 ## Core Concept
 
-The unit of comparison is the **candidate**: a complete pipeline from input image to a segmentation output. The framework runs every candidate against every evaluation test and reports the results.
+The unit of comparison is the **candidate**: a complete pipeline from input image to a segmentation output. The experiment script runs candidates against evaluation tests using the metrics described below.
 
 ## Segmentation Output
 
@@ -23,7 +23,7 @@ This is the base output type. `UncertaintyOutput` extends it (see `uq_design.md`
 
 ## Evaluation Tests
 
-All tests operate on the hard prediction against ground truth class labels. Metrics are computed using torchmetrics, which accumulates results across batches via `.update()` / `.compute()` calls. The benchmark runner handles this iteration (see `experiment_design.md`).
+All tests operate on the hard prediction against ground truth class labels. Metrics are computed using torchmetrics, which accumulates results across batches via `.update()` / `.compute()` calls. The experiment script owns the eval loop (see `experiment_design.md`).
 
 ### Per-class IoU / mIoU
 

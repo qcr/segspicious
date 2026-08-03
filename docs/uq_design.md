@@ -1,10 +1,10 @@
 # Uncertainty Quantification Design
 
-Benchmarking uncertainty estimation methods in semantic segmentation.
+Evaluating uncertainty estimation methods in semantic segmentation.
 
 ## Core Concept
 
-The unit of comparison is the **candidate**: a complete pipeline from input image to a standardised uncertainty output. Each candidate populates only the fields it meaningfully provides. The framework runs every candidate against every compatible evaluation test and reports the results.
+The unit of comparison is the **candidate**: a complete pipeline from input image to a standardised uncertainty output. Each candidate populates only the fields it meaningfully provides. The experiment script decides which metrics to run based on which output fields are populated.
 
 ## Uncertainty Output
 
@@ -41,15 +41,15 @@ The candidate is the semantic bridge between a model's raw output and the standa
 - An SSN samples model aleatoric variation, not parameter variation → it populates `aleatoric_uncertainty` but not `epistemic_uncertainty`, even though the underlying math (sample disagreement) looks similar.
 - An energy score computes -LogSumExp(logits) → `ood_score`. It does not populate `predictive_uncertainty` even though it has access to the same logits.
 
-The candidate author knows what their method measures. The framework trusts that labelling.
+The candidate author knows what their method measures. The experiment trusts that labelling.
 
 ## Evaluation Tests
 
-Each test declares which fields it requires. The framework checks compatibility and runs all valid (candidate, test) pairings. All metrics use torchmetrics and torch-uncertainty.metrics, which accumulate across batches via `.update()` / `.compute()`.
+Each test declares which output fields it accepts. All metrics use torchmetrics and torch-uncertainty.metrics, which accumulate across batches via `.update()` / `.compute()`. The experiment script is responsible for checking which fields a candidate provides and routing them to the appropriate metrics.
 
 ### OoD Detection
 
-Separates in-distribution pixels from out-of-distribution pixels. OoD ground truth is encoded in the label tensor: pixels with `label >= num_classes` are OoD (see `experiment_design.md`). The benchmark runner derives binary OoD targets from this convention and passes `(ood_scores, binary_labels)` to the metrics.
+Separates in-distribution pixels from out-of-distribution pixels. OoD ground truth is encoded in the label tensor: pixels with `label >= num_classes` are OoD (see `experiment_design.md`). The experiment script derives binary OoD targets from this convention and passes `(ood_scores, binary_labels)` to the metrics.
 
 | | |
 |---|---|
@@ -150,7 +150,7 @@ DDU:
 
 ## Results Matrix
 
-The benchmark output is a table of candidates × (test, field) pairs:
+A typical experiment might produce a table of candidates × (test, field) pairs:
 
 ```
                      OoD     OoD     OoD    Fail    Fail     Calib   ...
@@ -163,8 +163,4 @@ Mahalanobis           -       -     0.92     -       -        -
 DDU                  0.82     -     0.90    0.75     -       0.05
 ```
 
-Empty cells are documented incompatibilities, not missing data.
-
-## Shared Inference
-
-Multiple candidates may share the same underlying model. An ensemble computes member predictions once — separate candidates for MI, predictive entropy, etc. all draw from the same forward passes. This is an efficiency optimisation handled by grouping candidates by model at runtime. Conceptually, each candidate is independent.
+Empty cells are documented incompatibilities, not missing data. How results are collected and displayed is up to the experiment script.

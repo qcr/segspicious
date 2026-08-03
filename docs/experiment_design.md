@@ -4,7 +4,7 @@ Datasets, candidates, and experiment composition.
 
 ## Philosophy
 
-Experiments are defined in code. There is no configuration language, no YAML schema, no registry of experiment types. The framework provides clean building blocks — datasets, candidates, evaluation — and the experiment author composes them in a Python script. The goal is to make those scripts as simple, readable, and flexible as possible.
+Experiments are defined in code. There is no configuration language, no YAML schema, no registry of experiment types. The library provides clean building blocks — datasets, modifiers, output types, metrics, and the candidate protocol — and the experiment author composes them in a Python script. The experiment script owns the eval loop: it constructs a DataLoader, iterates batches, calls `predict()`, feeds results into metrics, and prints the output. This keeps the library focused on composable primitives and lets experiment scripts evolve freely without premature abstraction.
 
 ## SegmentationDataset
 
@@ -58,7 +58,7 @@ OoD status is encoded directly in the label tensor rather than as a separate mas
 - Eliminates the collation problem — no `None` vs tensor mismatch in DataLoader batching.
 - Preserves OoD class identity — you can analyse which OoD class was hardest to detect because the original index is retained.
 
-At evaluation time, the benchmark runner derives binary OoD targets from this convention: `ood = (labels >= num_classes) & (labels != ignore_index)`.
+At evaluation time, the experiment script derives binary OoD targets from this convention: `ood = (labels >= num_classes) & (labels != ignore_index)`.
 
 ### Design Decisions
 
@@ -231,7 +231,7 @@ A `torch.utils.data.DataLoader` wraps a Dataset and handles batching, shuffling,
 In our design, DataLoaders are constructed in two places:
 
 - **Training** — the candidate constructs its own DataLoader internally. It controls batch size, shuffle, num_workers — these are training decisions that affect results.
-- **Evaluation** — `run_benchmark` constructs the DataLoader. Batch size is a system/memory concern, not a method decision. The candidate never sees the DataLoader, just the batched tensors it produces.
+- **Evaluation** — the experiment script constructs the DataLoader. Batch size is a system/memory concern, not a method decision. The candidate never sees the DataLoader, just the batched tensors it produces.
 
 ## Candidate Lifecycle
 
@@ -253,8 +253,8 @@ class Candidate(Protocol):
     def predict(self, images: Tensor) -> SegmentationOutput:
         """Produce output for a batch of images. Receives a (B, C, H, W)
         tensor. Returns SegmentationOutput or UncertaintyOutput (which
-        extends it) with batch dimensions. The framework inspects which
-        fields are populated to determine compatible evaluation tests."""
+        extends it) with batch dimensions. The experiment script inspects
+        which fields are populated to determine compatible metrics."""
         ...
 
     def save(self, path: Path) -> None:
@@ -281,9 +281,9 @@ class Candidate(Protocol):
 ### What the Candidate Does Not Own
 
 - **What data to train on** — the experiment decides.
-- **What to evaluate** — the framework matches output fields to compatible tests.
+- **What to evaluate** — the experiment script decides which metrics to run and which output fields to use.
 - **Where to save state** — the experiment decides the path.
-- **Evaluation data loading** — the benchmark runner owns the eval DataLoader.
+- **Evaluation data loading** — the experiment script owns the eval DataLoader.
 
 ### Pre-trained Candidates
 
@@ -307,51 +307,32 @@ candidate.load(Path("./checkpoints/ensemble_r50"))
 
 ## Experiments as Code
 
-An experiment is a Python script that composes datasets, candidates, and evaluation. The framework provides building blocks; the experiment author decides how to wire them.
+An experiment is a Python script that composes datasets, candidates, and evaluation. The library provides building blocks; the experiment author writes the eval loop directly.
 
-### Example: Standard Benchmark
+### Example: Standard Evaluation
 
-Train all candidates on Cityscapes train, evaluate on Cityscapes test.
-
-```python
-from segspicious.datasets import CityscapesDataset
-from segspicious.candidates import SoftmaxCandidate, EnsembleCandidate, MCDropoutCandidate
-from segspicious.evaluation import run_benchmark
-
-train_data = CityscapesDataset("./data/cityscapes", split="train")
-test_data  = CityscapesDataset("./data/cityscapes", split="test")
-
-candidates = [
-    SoftmaxCandidate(name="softmax_r50",  backbone="resnet50", epochs=100),
-    EnsembleCandidate(name="ensemble_r50", backbone="resnet50", n_members=5, epochs=100),
-    MCDropoutCandidate(name="mcdrop_r50",  backbone="resnet50", n_samples=20, epochs=100),
-]
-
-for c in candidates:
-    c.train(train_data)
-
-results = run_benchmark(candidates, test_data)
-results.print_table()
-```
-
-### Example: Cross-Dataset Generalisation
-
-Train on Cityscapes, evaluate on BDD100K to measure domain shift.
+Train a candidate on Cityscapes train, evaluate on Cityscapes test.
 
 ```python
-train_data = CityscapesDataset("./data/cityscapes", split="train")
-bdd_test   = BDD100KDataset("./data/bdd100k", split="test")
+import torch
+from torch.utils.data import DataLoader
+from segspicious.metrics import IoU, PixelAccuracy
 
-candidates = [
-    SoftmaxCandidate(name="softmax_r50", backbone="resnet50", epochs=100),
-    EnsembleCandidate(name="ensemble_r50", backbone="resnet50", n_members=5, epochs=100),
-]
+# ... construct train_data, test_data, candidate ...
 
-for c in candidates:
-    c.train(train_data)
+candidate.train(train_data)
 
-results = run_benchmark(candidates, bdd_test)
-results.print_table()
+iou = IoU(num_classes=test_data.num_classes, ignore_index=test_data.ignore_index)
+acc = PixelAccuracy(num_classes=test_data.num_classes, ignore_index=test_data.ignore_index)
+
+loader = DataLoader(test_data, batch_size=4)
+for images, labels in loader:
+    output = candidate.predict(images)
+    iou.update(output, labels)
+    acc.update(output, labels)
+
+print(iou.compute())
+print(acc.compute())
 ```
 
 ### Example: OoD Detection with Held-Out Classes
@@ -370,8 +351,6 @@ eval_data = mark_as_ood(
 )
 # eval_data.num_classes == 16
 # eval_data.ood_class_names == ("motorcycle", "bicycle", "train")
-# Segmentation metrics exclude OoD pixels automatically (label >= num_classes)
-# OoD detection metrics derive binary targets: label >= num_classes → OoD
 
 # Training dataset: same relabelling, then remove samples with OoD pixels
 train_data = hold_out_ood(
@@ -380,20 +359,23 @@ train_data = hold_out_ood(
         classes=ood_classes,
     )
 )
-# train_data.num_classes == 16 (same metadata as eval_data)
-# No OoD pixels in any sample
 
-candidates = [
-    SoftmaxCandidate(name="softmax_r50", backbone="resnet50", epochs=100),
-    EnsembleCandidate(name="ensemble_r50", backbone="resnet50", n_members=5, epochs=100),
-    DDUCandidate(name="ddu_r50", backbone="resnet50", epochs=100),
-]
+candidate.train(train_data)
 
-for c in candidates:
-    c.train(train_data)
+# Eval loop with both segmentation and OoD metrics
+iou = IoU(num_classes=eval_data.num_classes, ignore_index=eval_data.ignore_index)
+ood_auroc = OoDDetection()
 
-results = run_benchmark(candidates, eval_data)
-results.print_table()
+loader = DataLoader(eval_data, batch_size=4)
+for images, labels in loader:
+    output = candidate.predict(images)
+    iou.update(output, labels)
+    ood_target = ((labels >= eval_data.num_classes) & (labels != eval_data.ignore_index)).long()
+    if output.predictive_uncertainty is not None:
+        ood_auroc.update(output.predictive_uncertainty, ood_target)
+
+print(iou.compute())
+print(ood_auroc.compute())
 ```
 
 ### Example: Train Once, Evaluate Multiple Scenarios
@@ -403,36 +385,28 @@ from segspicious.datasets import subset
 
 train_data = CityscapesDataset("./data/cityscapes", split="train")
 
-candidates = [...]
-for c in candidates:
-    c.train(train_data)
-    c.save(Path(f"./checkpoints/{c.name}"))
+candidate.train(train_data)
+candidate.save(Path("./checkpoints/softmax_r50"))
 
-# Scenario 1: in-distribution test performance
-id_results = run_benchmark(candidates, CityscapesDataset("./data/cityscapes", split="val"))
+# Scenario 1: in-distribution
+eval_id(candidate, CityscapesDataset("./data/cityscapes", split="val"))
 
 # Scenario 2: domain shift
-shift_results = run_benchmark(candidates, BDD100KDataset("./data/bdd100k", split="val"))
-
-# Scenario 3: reduced dataset to test data efficiency
-small_train = subset(train_data, n=500, seed=42)
-for c in candidates:
-    c_small = type(c)(**c.config)  # fresh copy, same config
-    c_small.train(small_train)
-# ...evaluate c_small...
+eval_id(candidate, BDD100KDataset("./data/bdd100k", split="val"))
 ```
 
-## Relationship to Evaluation
+The eval loops are short enough to write inline or extract into local helper functions within the experiment. If patterns stabilise across many experiments, they can be promoted into the library later.
 
-The evaluation framework (see `segmentation_design.md`, `uq_design.md`) uses torchmetrics and torch-uncertainty.metrics, which accumulate results across batches via `.update()` / `.compute()`. `run_benchmark` bridges the gap:
+## Relationship to Metrics
+
+The metrics (see `segmentation_design.md`, `uq_design.md`, `metrics_api.md`) use torchmetrics and torch-uncertainty.metrics, which accumulate results across batches via `.update()` / `.compute()`. The experiment script owns the eval loop:
 
 1. Constructs a `DataLoader` from the evaluation dataset.
 2. Iterates batches. For each batch:
    a. Unpacks `(images, labels)` from the DataLoader.
    b. Calls `candidate.predict(images)` → batched `SegmentationOutput` or `UncertaintyOutput`.
-   c. Derives ground truth masks from labels: `ood = (labels >= num_classes) & (labels != ignore_index)`, `ignore = labels == ignore_index`.
-   d. Calls `.update(output, ground_truth)` on all compatible metrics.
+   c. Derives any needed ground truth (e.g. OoD binary targets from the label convention).
+   d. Calls `.update()` on the relevant metrics.
 3. Calls `.compute()` on each metric to get final aggregated results.
-4. Returns the results matrix.
 
-The evaluation metrics themselves are stateless between runs — they don't know about datasets or candidates. They accumulate `(output, ground_truth)` pairs batch by batch and compute aggregate statistics at the end.
+The metrics themselves are stateless between runs — they don't know about datasets or candidates. They accumulate `(output, ground_truth)` pairs batch by batch and compute aggregate statistics at the end.
