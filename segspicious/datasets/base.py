@@ -30,13 +30,8 @@ class SegmentationDataset(Dataset):
 
     @property
     @abstractmethod
-    def all_class_names(self) -> tuple[str, ...]:
-        """Names of all classes (ID then OoD). Length >= num_classes.
-
-        ``all_class_names[:num_classes]`` are in-distribution,
-        ``all_class_names[num_classes:]`` are out-of-distribution.
-        ``all_class_names[label]`` gives the name for any non-ignore label.
-        """
+    def class_names(self) -> tuple[str, ...]:
+        """Names of in-distribution classes. Length must equal ``num_classes``."""
         ...
 
     @property
@@ -54,9 +49,17 @@ class SegmentationDataset(Dataset):
     # -- derived (free for all subclasses) ---------------------------------
 
     @property
-    def class_names(self) -> tuple[str, ...]:
-        """Names of in-distribution classes."""
-        return self.all_class_names[: self.num_classes]
+    def all_class_names(self) -> tuple[str, ...]:
+        """Names of all classes (ID then OoD). Length >= num_classes.
+
+        ``all_class_names[:num_classes]`` are in-distribution,
+        ``all_class_names[num_classes:]`` are out-of-distribution.
+        ``all_class_names[label]`` gives the name for any non-ignore label.
+
+        Defaults to ``class_names`` (no OoD classes). Overridden by
+        modifiers that introduce OoD classes (e.g. ``mark_as_ood``).
+        """
+        return self.class_names
 
     @property
     def ood_class_names(self) -> tuple[str, ...]:

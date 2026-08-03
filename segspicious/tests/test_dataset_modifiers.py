@@ -112,8 +112,11 @@ class TestConcatDatasets:
 
     def test_error_mismatched_ood_class_names(self):
         """Datasets with same ID names but different OoD names should fail."""
-        ds1 = SyntheticDataset(num_classes=3, class_names=("a", "b", "c"))
-        ds2 = SyntheticDataset(num_classes=3, class_names=("a", "b", "c", "ood_x"))
+        ds1 = SyntheticDataset(class_names=("a", "b", "c"))
+        ds2 = mark_as_ood(
+            SyntheticDataset(class_names=("a", "b", "c", "ood_x")),
+            classes=["ood_x"],
+        )
         with pytest.raises(ValueError, match="class_names"):
             concat_datasets([ds1, ds2])
 
@@ -549,15 +552,16 @@ class TestRemapClasses:
 
     def test_existing_ood_preserved(self):
         """Existing OoD classes survive remapping."""
-        ds = SyntheticDataset(
-            num_classes=3,
+        base = SyntheticDataset(
             num_samples=5,
             height=2,
             width=2,
             class_names=("road", "car", "building", "motorcycle"),
         )
-        # Manually add OoD pixels (motorcycle = label 3)
-        ds._labels[0] = torch.tensor([[3, 0], [1, 3]])
+        # Ensure sample 0 has motorcycle pixels so mark_as_ood has
+        # something to remap.
+        base._labels[0] = torch.tensor([[3, 0], [1, 3]])
+        ds = mark_as_ood(base, classes=["motorcycle"])
 
         remapped = remap_classes(
             ds,

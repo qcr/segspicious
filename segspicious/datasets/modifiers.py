@@ -49,6 +49,10 @@ class _Subset(SegmentationDataset):
         return self._dataset.num_classes
 
     @property
+    def class_names(self) -> tuple[str, ...]:
+        return self._dataset.class_names
+
+    @property
     def all_class_names(self) -> tuple[str, ...]:
         return self._dataset.all_class_names
 
@@ -95,6 +99,10 @@ class _ConcatDataset(SegmentationDataset):
         return self._first.num_classes
 
     @property
+    def class_names(self) -> tuple[str, ...]:
+        return self._first.class_names
+
+    @property
     def all_class_names(self) -> tuple[str, ...]:
         return self._first.all_class_names
 
@@ -134,6 +142,10 @@ class _RemappedDataset(SegmentationDataset):
     @property
     def num_classes(self) -> int:
         return self._num_classes
+
+    @property
+    def class_names(self) -> tuple[str, ...]:
+        return self._all_class_names[: self._num_classes]
 
     @property
     def all_class_names(self) -> tuple[str, ...]:

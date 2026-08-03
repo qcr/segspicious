@@ -24,6 +24,19 @@ class SegmentationDataset(torch.utils.data.Dataset):
     def __len__(self) -> int: ...
 
     def __getitem__(self, index: int) -> tuple[Tensor, Tensor]: ...
+
+    # Derived (free for all subclasses):
+    @property
+    def all_class_names(self) -> tuple[str, ...]: ...  # defaults to class_names
+
+    @property
+    def ood_class_names(self) -> tuple[str, ...]: ...   # all_class_names[num_classes:]
+
+    @property
+    def num_ood_classes(self) -> int: ...               # len(all_class_names) - num_classes
+
+    @property
+    def has_ood_classes(self) -> bool: ...
 ```
 
 ### Return Format
@@ -33,7 +46,7 @@ Each sample is a tuple of two tensors:
 - **image** — `(C, H, W)` float tensor. Channels-first, following PyTorch convention. No normalisation, no augmentation — raw pixels scaled to `[0, 1]`. The candidate is responsible for any preprocessing it needs.
 - **labels** — `(H, W)` long tensor. Per-pixel class index with three zones:
   - `[0, num_classes)` — valid in-distribution class labels
-  - `[num_classes, ignore_index)` — out-of-distribution pixels (may preserve original class identity)
+  - `[num_classes, num_classes + num_ood_classes)` — out-of-distribution class labels (preserving class identity)
   - `ignore_index` — pixels excluded from all evaluation (typically 255)
 
 ### OoD Encoding
@@ -55,7 +68,7 @@ At evaluation time, the benchmark runner derives binary OoD targets from this co
 
 **No transforms.** The dataset provides raw, unprocessed data. Augmentation, normalisation, resizing — all of that is the candidate's responsibility. Different candidates need different preprocessing; the dataset should not impose any.
 
-**Metadata is required.** `num_classes`, `class_names`, and `ignore_index` are properties on the dataset, not external configuration. The candidate and evaluation runner need to know these, and they should come from the dataset. Because `SegmentationDataset` is a base class (not a protocol), metadata propagates naturally through dataset modifiers that subclass it.
+**Metadata is required.** `num_classes`, `class_names`, and `ignore_index` are abstract properties on the dataset, not external configuration. The candidate and evaluation runner need to know these, and they should come from the dataset. `all_class_names`, `ood_class_names`, `num_ood_classes`, and `has_ood_classes` are derived automatically. `all_class_names` defaults to `class_names` (no OoD) and is overridden by modifiers like `mark_as_ood` that introduce OoD classes. Because `SegmentationDataset` is a base class (not a protocol), metadata propagates naturally through dataset modifiers that subclass it.
 
 ### Concrete Datasets
 
@@ -99,76 +112,111 @@ Adding a new dataset means extending `SegmentationDataset`. Most implementations
 Modifiers take a `SegmentationDataset` and return a new `SegmentationDataset`. They compose: the output of one modifier is valid input to another.
 
 ```
-select_classes(Subset(cityscapes_train, indices), keep=["road", "car", "person"])
+mark_as_ood(subset(cityscapes_train, n=500, seed=42), classes=["motorcycle", "bicycle"])
 ```
 
-### Standard PyTorch Modifiers
+### Filter-Based Modifiers
 
-Several common operations map directly to PyTorch's built-in dataset utilities. Because these don't change the class structure, they inherit metadata from the wrapped dataset unchanged. We provide thin subclasses that propagate `num_classes`, `class_names`, and `ignore_index` from the source dataset.
+Several operations are pure filters — they change which samples are included but don't modify labels or class metadata. They inherit metadata from the wrapped dataset unchanged, propagating `num_classes`, `all_class_names`, and `ignore_index`.
 
-**Subsample** — random subset of fixed size. Wraps `torch.utils.data.Subset`.
+**`subset`** — random or explicit subset.
 
 ```python
-small = Subset(dataset, n=500, seed=42)
+small = subset(dataset, n=500, seed=42)
 # small.num_classes == dataset.num_classes (propagated)
+
+explicit = subset(dataset, indices=[0, 3, 7])
 ```
 
-**Combine** — concatenates multiple datasets. Wraps `torch.utils.data.ConcatDataset`. All input datasets must share the same class set.
+**`concat_datasets`** — concatenates multiple datasets. All input datasets must share the same class set (`all_class_names` and `ignore_index` must match).
 
 ```python
-combined = ConcatDataset([cityscapes_train, bdd100k_train])
+combined = concat_datasets([cityscapes_train, bdd100k_train])
 # combined.num_classes == cityscapes_train.num_classes (validated, propagated)
 ```
 
-**Filter** — removes samples based on a predicate. Computes kept indices at construction, then wraps `torch.utils.data.Subset`.
+**`filter_samples`** — removes samples based on a predicate. Scans the dataset at construction to compute kept indices.
 
 ```python
 # Keep only samples that have at least 10% valid pixels
 filtered = filter_samples(dataset, predicate=lambda img, lbl: (lbl != 255).float().mean() > 0.1)
 ```
 
-### Custom Modifiers
+**`select_classes`** — keeps only samples containing at least one pixel of the specified classes. Pure filter, no label remapping.
 
-These modify the label space and must update metadata accordingly. They subclass `SegmentationDataset`, wrap the source dataset, and transform labels in `__getitem__`.
+```python
+# Keep only images that contain road or car pixels
+with_road_or_car = select_classes(dataset, classes=["road", "car"])
+```
 
-#### `select_classes`
+**`hold_out_classes`** — removes samples containing any pixel of the specified classes. Inverse of `select_classes`.
 
-Keeps only the specified classes. Remaining classes are remapped to contiguous indices `[0, n)`. Non-selected class pixels get labels `>= n` (preserving their original identity as OoD), following the OoD encoding convention.
+```python
+# Remove any image containing motorcycle pixels
+no_motorcycle = hold_out_classes(dataset, classes=["motorcycle"])
+```
+
+**`hold_out_ood`** — removes samples containing any out-of-distribution pixel (label `>= num_classes` and `!= ignore_index`). Typically used after `mark_as_ood` to create clean training sets.
+
+```python
+train_ds = hold_out_ood(mark_as_ood(full_train, classes=ood_classes))
+```
+
+### Label-Remapping Modifiers
+
+These modify the label space and must update metadata accordingly. They use a `_RemappedDataset` that applies a label lookup table in `__getitem__`.
+
+#### `mark_as_ood`
+
+Marks specified in-distribution classes as out-of-distribution. Keeps all samples. Remaining ID classes are remapped to contiguous `[0, n)`. Marked classes get OoD labels `>= n`. Existing OoD classes and `ignore_index` are preserved.
 
 This serves both training and evaluation in OoD experiments:
-- **Training**: the candidate sees a reduced-class dataset and trains a model with `num_classes` outputs. OoD pixels are excluded from the loss via standard `label >= num_classes` masking.
-- **Evaluation**: segmentation metrics use the remapped labels (OoD pixels excluded). OoD detection metrics derive binary targets from `label >= num_classes`.
+- **Evaluation**: the eval dataset has OoD pixels with labels `>= num_classes`. Segmentation metrics exclude them. OoD detection metrics derive binary targets from `label >= num_classes`.
+- **Training**: apply `hold_out_ood()` after `mark_as_ood()` to remove samples with OoD pixels, giving a clean training set with the same metadata.
 
 ```python
 full_train = CityscapesDataset("./data", split="train")
-reduced_train = select_classes(full_train, keep=["road", "sidewalk", "building", ...])
-# reduced_train.num_classes == 16  (if 3 classes were removed from 19)
-# reduced_train.class_names == ("road", "sidewalk", "building", ...)
-# sample labels: kept classes remapped to [0, 16), others → >= 16
+ood_classes = ["motorcycle", "bicycle", "train"]
+
+# For evaluation (keeps all samples, OoD pixels labelled >= num_classes)
+eval_ds = mark_as_ood(full_val, classes=ood_classes)
+# eval_ds.num_classes == 16
+# eval_ds.class_names == ("road", "sidewalk", "building", ...)
+# eval_ds.ood_class_names == ("motorcycle", "bicycle", "train")
+
+# For training (same relabelling, then filter out OoD samples)
+train_ds = hold_out_ood(mark_as_ood(full_train, classes=ood_classes))
+# train_ds.num_classes == 16 (same metadata as eval)
 ```
 
 | | |
 |---|---|
-| **Input** | Dataset, list of class names or indices to keep |
-| **`num_classes`** | Number of kept classes |
-| **`class_names`** | Names of kept classes |
-| **Labels** | Kept classes remapped to contiguous `[0, n)`, others to `>= n` |
+| **Input** | Dataset, list of class names or indices to mark as OoD |
+| **`num_classes`** | Number of remaining ID classes |
+| **`class_names`** | Names of remaining ID classes |
+| **`ood_class_names`** | Names of newly-OoD classes + any existing OoD classes |
+| **Labels** | ID classes remapped to `[0, n)`, marked classes to `[n, n+k)` |
 
 #### `remap_classes`
 
-Applies an explicit class index mapping. For non-standard remapping that `select_classes` doesn't cover.
+Applies an explicit class remapping by name. Multiple old classes mapping to the same new name are merged. Unmapped ID classes are preserved as ID with shifted indices. Existing OoD classes are preserved. No class changes its ID/OoD/ignore status.
 
 ```python
-remapped = remap_classes(dataset, mapping={0: 0, 1: 0, 2: 1, 3: 1, 4: 2})
-# Merges classes 0+1 → 0, 2+3 → 1, 4 → 2
-# remapped.num_classes == 3
+remapped = remap_classes(dataset, mapping={
+    "road": "ground", "sidewalk": "ground",
+    "car": "vehicle", "truck": "vehicle",
+    "building": "structure",
+})
+# Mapped classes get new indices in order of first appearance.
+# Unmapped ID classes stay ID, shifted after mapped ones.
 ```
 
 | | |
 |---|---|
-| **Input** | Dataset, mapping dict `{old_index: new_index}` |
-| **`num_classes`** | Number of distinct values in mapping |
-| **Labels** | Remapped per the dict, unmapped classes → `ignore_index` |
+| **Input** | Dataset, mapping dict `{old_name: new_name}` |
+| **`num_classes`** | Number of distinct new names + unmapped ID classes |
+| **`class_names`** | New names (first-appearance order) + unmapped class names |
+| **Labels** | Remapped per the dict, unmapped ID classes shifted |
 
 ### Laziness Model
 
@@ -311,18 +359,29 @@ results.print_table()
 Train on a reduced class set, evaluate OoD detection on held-out classes.
 
 ```python
-from segspicious.datasets import CityscapesDataset, select_classes
+from segspicious.datasets import CityscapesDataset, mark_as_ood, hold_out_ood
 
-all_classes = CityscapesDataset.CLASS_NAMES
-ood_classes = ("motorcycle", "bicycle", "train")
-id_classes  = tuple(c for c in all_classes if c not in ood_classes)
+ood_classes = ["motorcycle", "bicycle", "train"]
 
-train_data = select_classes(CityscapesDataset("./data/cityscapes", split="train"), keep=id_classes)
-eval_data  = select_classes(CityscapesDataset("./data/cityscapes", split="val"),   keep=id_classes)
+# Evaluation dataset: all samples, OoD classes relabelled >= num_classes
+eval_data = mark_as_ood(
+    CityscapesDataset("./data/cityscapes", split="val"),
+    classes=ood_classes,
+)
 # eval_data.num_classes == 16
-# eval_data labels: kept classes remapped to [0, 16), motorcycle/bicycle/train → >= 16
+# eval_data.ood_class_names == ("motorcycle", "bicycle", "train")
 # Segmentation metrics exclude OoD pixels automatically (label >= num_classes)
 # OoD detection metrics derive binary targets: label >= num_classes → OoD
+
+# Training dataset: same relabelling, then remove samples with OoD pixels
+train_data = hold_out_ood(
+    mark_as_ood(
+        CityscapesDataset("./data/cityscapes", split="train"),
+        classes=ood_classes,
+    )
+)
+# train_data.num_classes == 16 (same metadata as eval_data)
+# No OoD pixels in any sample
 
 candidates = [
     SoftmaxCandidate(name="softmax_r50", backbone="resnet50", epochs=100),
@@ -340,6 +399,8 @@ results.print_table()
 ### Example: Train Once, Evaluate Multiple Scenarios
 
 ```python
+from segspicious.datasets import subset
+
 train_data = CityscapesDataset("./data/cityscapes", split="train")
 
 candidates = [...]
@@ -354,7 +415,7 @@ id_results = run_benchmark(candidates, CityscapesDataset("./data/cityscapes", sp
 shift_results = run_benchmark(candidates, BDD100KDataset("./data/bdd100k", split="val"))
 
 # Scenario 3: reduced dataset to test data efficiency
-small_train = Subset(train_data, n=500, seed=42)
+small_train = subset(train_data, n=500, seed=42)
 for c in candidates:
     c_small = type(c)(**c.config)  # fresh copy, same config
     c_small.train(small_train)
