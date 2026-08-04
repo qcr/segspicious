@@ -1,6 +1,7 @@
 """Dataset base class and modifiers for segmentation benchmarking."""
 
 from segspicious.datasets.base import SegmentationDataset, Split
+from segspicious.datasets.cache import ClassIndexCache
 from segspicious.datasets.modifiers import (
     concat_datasets,
     filter_by_labels,
@@ -14,6 +15,7 @@ from segspicious.datasets.modifiers import (
 )
 
 __all__ = [
+    "ClassIndexCache",
     "SegmentationDataset",
     "Split",
     "concat_datasets",

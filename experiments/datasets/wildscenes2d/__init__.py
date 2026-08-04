@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import csv
-import json
-import logging
 from enum import Enum
 from importlib import resources
 from pathlib import Path
@@ -13,7 +11,7 @@ import torch
 from torch import Tensor
 from torchvision.io import ImageReadMode, decode_image
 
-from segspicious.datasets import SegmentationDataset, Split
+from segspicious.datasets import ClassIndexCache, SegmentationDataset, Split
 
 # -- Class definition ------------------------------------------------------
 
@@ -65,7 +63,7 @@ class Sequence(Enum):
     ALL = "all"
 
 
-def _load_split_csv(split: Split) -> list[tuple[str, str]]:
+def _load_split_csv(split: Split) -> list[tuple[Path, Path]]:
     """Load a bundled split CSV and return (image_path, label_path) pairs.
 
     Paths in the CSV are prefixed with ``WildScenes2d/<sequence>/…``.
@@ -76,10 +74,10 @@ def _load_split_csv(split: Split) -> list[tuple[str, str]]:
     ref = resources.files(__package__) / "splits" / csv_name
     with resources.as_file(ref) as csv_path, open(csv_path, newline="") as f:
         reader = csv.DictReader(f)
-        pairs: list[tuple[str, str]] = []
+        pairs: list[tuple[Path, Path]] = []
         for row in reader:
-            im = row["im_path"].removeprefix("WildScenes2d/")
-            lbl = row["label_path"].removeprefix("WildScenes2d/")
+            im = Path(row["im_path"].removeprefix("WildScenes2d/"))
+            lbl = Path(row["label_path"].removeprefix("WildScenes2d/"))
             pairs.append((im, lbl))
     return pairs
 
@@ -106,71 +104,28 @@ class Wildscenes2dDataset(SegmentationDataset):
     ) -> None:
         self._root = Path(root)
 
-        pairs = _load_split_csv(split)
+        sample_paths = _load_split_csv(split)
 
         if sequence is not Sequence.ALL:
-            prefix = sequence.value + "/"
-            pairs = [(im, lbl) for im, lbl in pairs if im.startswith(prefix)]
+            seq_dir = Path(sequence.value)
+            sample_paths = [
+                (im_path, lbl_path)
+                for im_path, lbl_path in sample_paths
+                if im_path.is_relative_to(seq_dir)
+            ]
 
-        if not pairs:
+        if not sample_paths:
             raise ValueError(
                 f"No samples found for split={split.value!r}, "
                 f"sequence={sequence.value!r}."
             )
 
-        self._pairs = pairs
-        self._class_index: dict[str, list[int]] | None = None
-
-    # -- class index cache -------------------------------------------------
-
-    @staticmethod
-    def _cache_path(root: Path) -> Path:
-        return root / ".segspicious_cache" / "classes_present.json"
-
-    def _load_or_build_class_index(self) -> dict[str, list[int]]:
-        """Load cached per-sample class sets, or build and cache them."""
-        cache_file = self._cache_path(self._root)
-
-        # Load existing cache (may be partial or empty).
-        index: dict[str, list[int]] = {}
-        if cache_file.exists():
-            with open(cache_file) as f:
-                index = json.load(f)
-
-        # Find samples not yet in the cache.
-        missing = [(_im, lbl) for _im, lbl in self._pairs if lbl not in index]
-
-        if missing:
-            log = logging.getLogger(__name__)
-            log.info(
-                "Building class index for %d samples (one-time cost)…",
-                len(missing),
-            )
-            for _im_rel, lbl_rel in missing:
-                raw = decode_image(
-                    str(self._root / lbl_rel), mode=ImageReadMode.GRAY
-                ).squeeze(0)
-                classes = _LABEL_REMAP[raw.long()].unique().tolist()
-                index[lbl_rel] = sorted(classes)
-
-            try:
-                cache_file.parent.mkdir(parents=True, exist_ok=True)
-                with open(cache_file, "w") as f:
-                    json.dump(index, f)
-                log.info("Class index cached to %s", cache_file)
-            except OSError:
-                log = logging.getLogger(__name__)
-                log.warning(
-                    "Could not write class index cache to %s; will rebuild next time.",
-                    cache_file,
-                )
-
-        return index
-
-    def _ensure_class_index(self) -> dict[str, list[int]]:
-        if self._class_index is None:
-            self._class_index = self._load_or_build_class_index()
-        return self._class_index
+        self._sample_paths = sample_paths
+        self._class_cache = ClassIndexCache(
+            path=self._root / ".segspicious_cache" / "classes_present.json",
+            index_to_key=[str(lbl_path) for _, lbl_path in sample_paths],
+            get_labels=self.get_labels,
+        )
 
     @property
     def num_classes(self) -> int:
@@ -185,18 +140,18 @@ class Wildscenes2dDataset(SegmentationDataset):
         return _IGNORE_INDEX
 
     def __len__(self) -> int:
-        return len(self._pairs)
+        return len(self._sample_paths)
 
     def __getitem__(self, index: int) -> tuple[Tensor, Tensor]:
-        im_rel, lbl_rel = self._pairs[index]
+        image_path, label_path = self._sample_paths[index]
 
         image = (
-            decode_image(str(self._root / im_rel), mode=ImageReadMode.RGB).float()
+            decode_image(str(self._root / image_path), mode=ImageReadMode.RGB).float()
             / 255.0
         )
 
         raw_labels = decode_image(
-            str(self._root / lbl_rel), mode=ImageReadMode.GRAY
+            str(self._root / label_path), mode=ImageReadMode.GRAY
         ).squeeze(0)
         labels = _LABEL_REMAP[raw_labels.long()]
 
@@ -204,14 +159,11 @@ class Wildscenes2dDataset(SegmentationDataset):
 
     def get_labels(self, index: int) -> Tensor:
         """Decode only the label PNG, skipping the RGB image."""
-        _im_rel, lbl_rel = self._pairs[index]
-        raw = decode_image(str(self._root / lbl_rel), mode=ImageReadMode.GRAY).squeeze(
-            0
-        )
+        _, label_path = self._sample_paths[index]
+        raw = decode_image(
+            str(self._root / label_path), mode=ImageReadMode.GRAY
+        ).squeeze(0)
         return _LABEL_REMAP[raw.long()]
 
     def get_classes_present(self, index: int) -> frozenset[int]:
-        """Look up classes from cached index (no image decoding)."""
-        ci = self._ensure_class_index()
-        _im_rel, lbl_rel = self._pairs[index]
-        return frozenset(ci[lbl_rel])
+        return self._class_cache.get_classes_present(index)
