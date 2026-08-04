@@ -1,0 +1,267 @@
+"""DeepLabV3 ResNet-50 candidate with softmax UQ."""
+
+from __future__ import annotations
+
+import random
+from pathlib import Path
+
+import torch
+import torch.nn.functional as F
+from torch import Tensor, nn
+from torch.optim import SGD
+from torch.optim.lr_scheduler import LambdaLR
+from torch.utils.data import DataLoader, Dataset
+from torchvision.models.segmentation import (
+    DeepLabV3_ResNet50_Weights,
+    deeplabv3_resnet50,
+)
+from tqdm import tqdm
+
+from segspicious.datasets import SegmentationDataset
+from segspicious.outputs import UncertaintyOutput
+
+# -- ImageNet normalisation ------------------------------------------------
+
+_MEAN = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+_STD = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+
+
+def _normalise(images: Tensor) -> Tensor:
+    """ImageNet-normalise a ``(B, 3, H, W)`` float tensor in [0, 1]."""
+    mean = _MEAN.to(images.device)
+    std = _STD.to(images.device)
+    return (images - mean) / std
+
+
+# -- Training augmentation dataset ----------------------------------------
+
+
+class _TrainAugDataset(Dataset):
+    """Wraps a SegmentationDataset with joint image/label augmentation."""
+
+    def __init__(
+        self,
+        dataset: SegmentationDataset,
+        crop_size: int,
+        scale_range: tuple[float, float] = (0.5, 2.0),
+        ignore_index: int = 255,
+    ) -> None:
+        self._dataset = dataset
+        self._crop_size = crop_size
+        self._scale_lo, self._scale_hi = scale_range
+        self._ignore_index = ignore_index
+
+    def __len__(self) -> int:
+        return len(self._dataset)
+
+    def __getitem__(self, index: int) -> tuple[Tensor, Tensor]:
+        image, labels = self._dataset[index]
+        # image: (3, H, W) float [0, 1], labels: (H, W) long
+
+        _, h, w = image.shape
+
+        # -- Random scale --------------------------------------------------
+        scale = random.uniform(self._scale_lo, self._scale_hi)
+        new_h, new_w = int(h * scale), int(w * scale)
+
+        image = F.interpolate(
+            image.unsqueeze(0),
+            size=(new_h, new_w),
+            mode="bilinear",
+            align_corners=False,
+        ).squeeze(0)
+        labels = (
+            F.interpolate(
+                labels.float().unsqueeze(0).unsqueeze(0),
+                size=(new_h, new_w),
+                mode="nearest",
+            )
+            .squeeze(0)
+            .squeeze(0)
+            .long()
+        )
+
+        # -- Pad if smaller than crop_size ---------------------------------
+        pad_h = max(self._crop_size - new_h, 0)
+        pad_w = max(self._crop_size - new_w, 0)
+        if pad_h > 0 or pad_w > 0:
+            image = F.pad(image, (0, pad_w, 0, pad_h), value=0.0)
+            labels = F.pad(labels, (0, pad_w, 0, pad_h), value=self._ignore_index)
+
+        # -- Random crop ---------------------------------------------------
+        _, ch, cw = image.shape
+        top = random.randint(0, ch - self._crop_size)
+        left = random.randint(0, cw - self._crop_size)
+        image = image[:, top : top + self._crop_size, left : left + self._crop_size]
+        labels = labels[top : top + self._crop_size, left : left + self._crop_size]
+
+        # -- Random horizontal flip ----------------------------------------
+        if random.random() > 0.5:
+            image = image.flip(-1)
+            labels = labels.flip(-1)
+
+        # -- ImageNet normalise --------------------------------------------
+        image = _normalise(image)
+
+        return image, labels
+
+
+# -- Candidate -------------------------------------------------------------
+
+
+class DeepLabV3RN50Candidate:
+    """DeepLabV3 ResNet-50 segmentation candidate with softmax UQ.
+
+    Uses a COCO-pretrained DeepLabV3 ResNet-50 backbone from torchvision,
+    fine-tuned on the provided dataset.  Produces softmax class
+    probabilities and predictive entropy as uncertainty.
+
+    Args:
+        num_classes: Number of output classes.
+        epochs: Training epochs.
+        batch_size: Training batch size.
+        lr: Base learning rate for backbone.  Classifier heads use 10x.
+        crop_size: Random crop size during training.
+        num_workers: DataLoader workers for training.
+    """
+
+    def __init__(
+        self,
+        num_classes: int,
+        epochs: int = 50,
+        batch_size: int = 4,
+        lr: float = 0.01,
+        crop_size: int = 512,
+        num_workers: int = 4,
+    ) -> None:
+        self._num_classes = num_classes
+        self._epochs = epochs
+        self._batch_size = batch_size
+        self._lr = lr
+        self._crop_size = crop_size
+        self._num_workers = num_workers
+
+        self._model = self._build_model(num_classes)
+
+    @staticmethod
+    def _build_model(num_classes: int) -> nn.Module:
+        model = deeplabv3_resnet50(
+            weights=DeepLabV3_ResNet50_Weights.COCO_WITH_VOC_LABELS_V1,
+        )
+
+        # Replace classifier heads for target class count
+        in_ch = model.classifier[-1].in_channels
+        model.classifier[-1] = nn.Conv2d(in_ch, num_classes, 1)
+
+        in_ch_aux = model.aux_classifier[-1].in_channels
+        model.aux_classifier[-1] = nn.Conv2d(in_ch_aux, num_classes, 1)
+
+        return model
+
+    @property
+    def name(self) -> str:
+        return "deeplabv3-rn50"
+
+    # -- Training ----------------------------------------------------------
+
+    def train(self, dataset: SegmentationDataset) -> None:
+        """Fine-tune on the given dataset."""
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        model = self._model.to(device)
+        model.train()
+
+        train_ds = _TrainAugDataset(
+            dataset,
+            crop_size=self._crop_size,
+            ignore_index=dataset.ignore_index,
+        )
+        loader = DataLoader(
+            train_ds,
+            batch_size=self._batch_size,
+            shuffle=True,
+            num_workers=self._num_workers,
+            pin_memory=device.type == "cuda",
+            drop_last=True,
+        )
+
+        # Backbone at lr, fresh heads at 10× lr
+        head_params: list[nn.Parameter] = []
+        backbone_params: list[nn.Parameter] = []
+        for name, param in model.named_parameters():
+            if "classifier" in name:
+                head_params.append(param)
+            else:
+                backbone_params.append(param)
+
+        optimiser = SGD(
+            [
+                {"params": backbone_params, "lr": self._lr},
+                {"params": head_params, "lr": self._lr * 10},
+            ],
+            momentum=0.9,
+            weight_decay=1e-4,
+        )
+
+        max_iters = self._epochs * len(loader)
+        scheduler = LambdaLR(
+            optimiser,
+            lr_lambda=lambda it: (1 - it / max_iters) ** 0.9,
+        )
+
+        criterion = nn.CrossEntropyLoss(ignore_index=dataset.ignore_index)
+
+        for epoch in range(self._epochs):
+            pbar = tqdm(loader, desc=f"Epoch {epoch + 1}/{self._epochs}")
+            for images, labels in pbar:
+                images = images.to(device)
+                labels = labels.to(device)
+
+                out = model(images)
+                loss = criterion(out["out"], labels)
+                loss_aux = criterion(out["aux"], labels)
+                total_loss = loss + 0.4 * loss_aux
+
+                optimiser.zero_grad()
+                total_loss.backward()
+                optimiser.step()
+                scheduler.step()
+
+                pbar.set_postfix(loss=f"{total_loss.item():.4f}")
+
+        self._model = model.cpu()
+
+    # -- Inference ---------------------------------------------------------
+
+    def predict(self, images: Tensor) -> UncertaintyOutput:
+        """Single forward pass → softmax probabilities + entropy."""
+        self._model.to(images.device)
+        self._model.eval()
+
+        with torch.no_grad():
+            logits = self._model(_normalise(images))["out"]  # (B, C, H, W)
+
+            class_probs = F.softmax(logits, dim=1)  # (B, C, H, W)
+            prediction = class_probs.argmax(dim=1)  # (B, H, W)
+
+            # Predictive entropy: -Σ p·log(p)
+            log_probs = torch.log(class_probs.clamp(min=1e-8))
+            predictive_uncertainty = -(class_probs * log_probs).sum(dim=1)  # (B, H, W)
+
+        return UncertaintyOutput(
+            prediction=prediction,
+            class_probs=class_probs,
+            predictive_uncertainty=predictive_uncertainty,
+        )
+
+    # -- Serialisation -----------------------------------------------------
+
+    def save(self, path: Path) -> None:
+        """Save model weights to disk."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(self._model.state_dict(), path)
+
+    def load(self, path: Path) -> None:
+        """Load model weights from disk."""
+        state = torch.load(path, map_location="cpu", weights_only=True)
+        self._model.load_state_dict(state)
