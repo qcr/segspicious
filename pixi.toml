@@ -30,4 +30,4 @@ pytest = "*"
 default = { features = ["dev"], solve-group = "default" }
 
 [tasks]
-test = "pytest segspicious/tests/ -v"
+test = "pytest segspicious/tests/ experiments/ -v"

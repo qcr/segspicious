@@ -13,4 +13,4 @@ dependencies = []
 packages = ["segspicious"]
 
 [tool.pytest.ini_options]
-testpaths = ["segspicious/tests"]
+testpaths = ["segspicious/tests", "experiments"]
