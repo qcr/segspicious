@@ -1,96 +1,76 @@
-"""Candidate protocol and output types for segmentation benchmarking."""
+"""Candidate interface for segmentation UQ benchmarking."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-import numpy as np
+from torch import Tensor
 
-from segspicious.dataset import SegmentationDataset
-
-
-@dataclass
-class SegmentationOutput:
-    """Output from a segmentation candidate.
-
-    Attributes:
-        prediction: (H, W) int array — argmax class map.
-    """
-
-    prediction: np.ndarray
-
-    @property
-    def height(self) -> int:
-        """Spatial height of the prediction map."""
-        return int(self.prediction.shape[0])
-
-    @property
-    def width(self) -> int:
-        """Spatial width of the prediction map."""
-        return int(self.prediction.shape[1])
-
-
-@dataclass
-class UncertaintyOutput(SegmentationOutput):
-    """Extended output that includes uncertainty estimates.
-
-    Inherits ``prediction`` from :class:`SegmentationOutput`.  Each optional
-    field defaults to ``None``; a candidate populates only the fields it can
-    meaningfully provide.
-
-    Attributes:
-        class_probs: (H, W, C) probability distribution over classes.
-        predictive_uncertainty: (H, W) total uncertainty.
-        aleatoric_uncertainty: (H, W) data ambiguity.
-        epistemic_uncertainty: (H, W) model ignorance.
-        ood_score: (H, W) input unfamiliarity.
-    """
-
-    class_probs: np.ndarray | None = None
-    predictive_uncertainty: np.ndarray | None = None
-    aleatoric_uncertainty: np.ndarray | None = None
-    epistemic_uncertainty: np.ndarray | None = None
-    ood_score: np.ndarray | None = None
-
-    @property
-    def num_classes(self) -> int | None:
-        """Number of classes, or ``None`` if *class_probs* is not set."""
-        if self.class_probs is None:
-            return None
-        return int(self.class_probs.shape[2])
-
-    def __post_init__(self) -> None:
-        """Validate that all populated arrays share the same spatial dims."""
-        h, w = self.prediction.shape[:2]
-        spatial_fields = (
-            "class_probs",
-            "predictive_uncertainty",
-            "aleatoric_uncertainty",
-            "epistemic_uncertainty",
-            "ood_score",
-        )
-        for name in spatial_fields:
-            arr = getattr(self, name)
-            if arr is not None and arr.shape[:2] != (h, w):
-                raise ValueError(
-                    f"{name} has spatial shape {arr.shape[:2]}, "
-                    f"expected ({h}, {w}) to match prediction"
-                )
+from segspicious.datasets.base import SegmentationDataset
+from segspicious.outputs import SegmentationOutput
 
 
 @runtime_checkable
 class Candidate(Protocol):
-    """Protocol for a segmentation candidate (model + inference pipeline)."""
+    """A complete pipeline from input image to segmentation output.
+
+    The candidate is the unit of comparison in an experiment. It owns its
+    full training procedure (architecture, optimiser, augmentation, etc.)
+    and its inference procedure (how raw model output becomes a
+    ``SegmentationOutput`` or ``UncertaintyOutput``).
+
+    Lifecycle: **construct → train → save → load → predict**.
+
+    The experiment script constructs the candidate with its configuration,
+    calls ``train()`` with a dataset, and later calls ``predict()`` with
+    batched image tensors. ``save``/``load`` enable training on one machine
+    and evaluating on another.
+    """
 
     @property
-    def name(self) -> str: ...
+    def name(self) -> str:
+        """Identifier for results tables and saved state."""
+        ...
 
-    def train(self, dataset: SegmentationDataset) -> None: ...
+    def train(self, dataset: SegmentationDataset) -> None:
+        """Train on the given dataset.
 
-    def predict(self, image: np.ndarray) -> SegmentationOutput: ...
+        The candidate owns its full training procedure: architecture,
+        optimiser, schedule, augmentation, epochs, DataLoader construction,
+        everything. The experiment only provides data.
 
-    def save(self, path: Path) -> None: ...
+        A pre-trained candidate may implement this as a no-op.
+        """
+        ...
 
-    def load(self, path: Path) -> None: ...
+    def predict(self, images: Tensor) -> SegmentationOutput:
+        """Produce output for a batch of images.
+
+        Args:
+            images: ``(B, C, H, W)`` float tensor in ``[0, 1]``.
+
+        Returns:
+            ``SegmentationOutput`` or ``UncertaintyOutput`` (which extends
+            it). The framework inspects which fields are populated to
+            determine compatible evaluation tests.
+        """
+        ...
+
+    def save(self, path: Path) -> None:
+        """Serialise learned state to disk.
+
+        Only learned state — the candidate's configuration (architecture,
+        hyperparameters) lives in the experiment code that constructs the
+        candidate object.
+        """
+        ...
+
+    def load(self, path: Path) -> None:
+        """Load learned state from disk.
+
+        The candidate object must already exist (constructed with matching
+        configuration). This mirrors PyTorch's
+        ``model.load_state_dict(torch.load(path))`` pattern.
+        """
+        ...

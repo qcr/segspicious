@@ -4,32 +4,14 @@ Datasets, candidates, and experiment composition.
 
 ## Philosophy
 
-Experiments are defined in code. There is no configuration language, no YAML schema, no registry of experiment types. The framework provides clean building blocks — datasets, candidates, evaluation — and the experiment author composes them in a Python script. The goal is to make those scripts as simple, readable, and flexible as possible.
-
-## SegmentationSample
-
-The data unit. Every dataset returns these.
-
-```python
-@dataclass
-class SegmentationSample:
-    image:    np.ndarray                # (H, W, C) uint8 RGB
-    labels:   np.ndarray                # (H, W) int, class indices
-    ood_mask: np.ndarray | None = None  # (H, W) bool, True = out-of-distribution
-```
-
-### Field Semantics
-
-- **image** — the input image. Always numpy, always `(H, W, C)`, always RGB, always uint8. No normalisation, no augmentation — raw pixels. The candidate is responsible for any preprocessing it needs.
-- **labels** — per-pixel class index. Values in `[0, num_classes)` for valid pixels, or `ignore_index` for pixels that should be excluded from both training loss and evaluation metrics.
-- **ood_mask** — optional binary mask indicating which pixels are out-of-distribution. `None` by default. Set either by the dataset natively (e.g. Fishyscapes) or by a dataset modifier (e.g. marking held-out classes as OoD). The OoD detection evaluation test requires this field.
+Experiments are defined in code. There is no configuration language, no YAML schema, no registry of experiment types. The library provides clean building blocks — datasets, modifiers, output types, metrics, and the candidate protocol — and the experiment author composes them in a Python script. The experiment script owns the eval loop: it constructs a DataLoader, iterates batches, calls `predict()`, feeds results into metrics, and prints the output. This keeps the library focused on composable primitives and lets experiment scripts evolve freely without premature abstraction.
 
 ## SegmentationDataset
 
-The dataset protocol. This is what candidates receive for training and what the evaluation runner iterates over.
+The dataset base class. Extends `torch.utils.data.Dataset` to add required segmentation metadata. Every dataset returns `(image, labels)` tensor pairs.
 
 ```python
-class SegmentationDataset(Protocol):
+class SegmentationDataset(torch.utils.data.Dataset):
     @property
     def num_classes(self) -> int: ...
 
@@ -41,25 +23,59 @@ class SegmentationDataset(Protocol):
 
     def __len__(self) -> int: ...
 
-    def __getitem__(self, index: int) -> SegmentationSample: ...
+    def __getitem__(self, index: int) -> tuple[Tensor, Tensor]: ...
+
+    # Derived (free for all subclasses):
+    @property
+    def all_class_names(self) -> tuple[str, ...]: ...  # defaults to class_names
+
+    @property
+    def ood_class_names(self) -> tuple[str, ...]: ...   # all_class_names[num_classes:]
+
+    @property
+    def num_ood_classes(self) -> int: ...               # len(all_class_names) - num_classes
+
+    @property
+    def has_ood_classes(self) -> bool: ...
 ```
+
+### Return Format
+
+Each sample is a tuple of two tensors:
+
+- **image** — `(C, H, W)` float tensor. Channels-first, following PyTorch convention. No normalisation, no augmentation — raw pixels scaled to `[0, 1]`. The candidate is responsible for any preprocessing it needs.
+- **labels** — `(H, W)` long tensor. Per-pixel class index with three zones:
+  - `[0, num_classes)` — valid in-distribution class labels
+  - `[num_classes, num_classes + num_ood_classes)` — out-of-distribution class labels (preserving class identity)
+  - `ignore_index` — pixels excluded from all evaluation (typically 255)
+
+### OoD Encoding
+
+OoD status is encoded directly in the label tensor rather than as a separate mask. A pixel is OoD if `label >= num_classes` and `label != ignore_index`. This convention:
+
+- Matches the torch-uncertainty convention (used by MUAD, etc.), so their segmentation OoD metrics (`SegmentationBinaryAUROC`, `SegmentationFPR95`, etc.) work with no translation.
+- Handles "extra classes" naturally — a dataset with 15 known classes and additional anomaly classes just sets `num_classes=15` and leaves anomaly labels at their original indices.
+- Eliminates the collation problem — no `None` vs tensor mismatch in DataLoader batching.
+- Preserves OoD class identity — you can analyse which OoD class was hardest to detect because the original index is retained.
+
+At evaluation time, the experiment script derives binary OoD targets from this convention: `ood = (labels >= num_classes) & (labels != ignore_index)`.
 
 ### Design Decisions
 
-**Framework-agnostic.** The protocol uses numpy arrays, not torch tensors. It sits above PyTorch. A PyTorch-based candidate wraps it internally — creating a `torch.utils.data.Dataset`, adding transforms, building a `DataLoader`. That translation is trivial (a few lines) and can be provided as a utility. But the protocol itself has no PyTorch dependency.
+**PyTorch-native.** The dataset is a `torch.utils.data.Dataset` subclass returning tensors. This means standard PyTorch `DataLoader` works directly — batching, shuffling, parallel loading, pinned memory all come for free with no adapter layer.
 
-**A dataset is a split.** `Cityscapes(root, split='train')` and `Cityscapes(root, split='test')` are two separate dataset objects. There is no container that holds both. The experiment composes them explicitly. This is simpler, and it composes naturally: if you want to train on Cityscapes train and evaluate on BDD100K test, those are just two independent objects passed to different functions.
+**A dataset is a split.** `CityscapesDataset(root, split='train')` and `CityscapesDataset(root, split='test')` are two separate dataset objects. There is no container that holds both. The experiment composes them explicitly. This is simpler, and it composes naturally: if you want to train on Cityscapes train and evaluate on BDD100K test, those are just two independent objects passed to different functions.
 
 **No transforms.** The dataset provides raw, unprocessed data. Augmentation, normalisation, resizing — all of that is the candidate's responsibility. Different candidates need different preprocessing; the dataset should not impose any.
 
-**Metadata is required.** `num_classes`, `class_names`, and `ignore_index` are properties on the dataset, not external configuration. The candidate and evaluation runner need to know these, and they should come from the dataset.
+**Metadata is required.** `num_classes`, `class_names`, and `ignore_index` are abstract properties on the dataset, not external configuration. The candidate and evaluation runner need to know these, and they should come from the dataset. `all_class_names`, `ood_class_names`, `num_ood_classes`, and `has_ood_classes` are derived automatically. `all_class_names` defaults to `class_names` (no OoD) and is overridden by modifiers like `mark_as_ood` that introduce OoD classes. Because `SegmentationDataset` is a base class (not a protocol), metadata propagates naturally through dataset modifiers that subclass it.
 
 ### Concrete Datasets
 
-Concrete dataset classes wrap existing data sources (torchvision datasets, image directories, HuggingFace datasets, etc.) and expose them through the protocol:
+Concrete dataset classes wrap existing data sources (torchvision datasets, image directories, HuggingFace datasets, etc.) and extend the base class:
 
 ```python
-class CityscapesDataset:
+class CityscapesDataset(SegmentationDataset):
     """Wraps torchvision.datasets.Cityscapes."""
 
     def __init__(self, root: str, split: str = "train"):
@@ -82,113 +98,140 @@ class CityscapesDataset:
     def __len__(self) -> int:
         return len(self._dataset)
 
-    def __getitem__(self, index: int) -> SegmentationSample:
+    def __getitem__(self, index: int) -> tuple[Tensor, Tensor]:
         img, seg = self._dataset[index]
-        return SegmentationSample(
-            image=np.asarray(img),
-            labels=remap_cityscapes_ids(np.asarray(seg)),
-        )
+        image = to_float_tensor(img)          # → (C, H, W) float
+        labels = remap_cityscapes_ids(seg)    # → (H, W) long
+        return image, labels
 ```
 
-Adding a new dataset means implementing this interface. Most implementations are thin wrappers.
+Adding a new dataset means extending `SegmentationDataset`. Most implementations are thin wrappers.
 
 ## Dataset Modifiers
 
-Modifiers take a dataset and return a new dataset satisfying the same protocol. They compose: the output of one modifier is valid input to another.
+Modifiers take a `SegmentationDataset` and return a new `SegmentationDataset`. They compose: the output of one modifier is valid input to another.
 
 ```
-select_classes(subsample(cityscapes_train, n=1000), keep=["road", "car", "person"])
+mark_as_ood(subset(cityscapes_train, n=500, seed=42), classes=["motorcycle", "bicycle"])
 ```
 
-### Laziness Model
+### Filter-Based Modifiers
 
-Modifiers are lazy on data: `__getitem__` delegates to the wrapped dataset and transforms per-sample on access. No pixel data is copied at construction time.
+Several operations are pure filters — they change which samples are included but don't modify labels or class metadata. They inherit metadata from the wrapped dataset unchanged, propagating `num_classes`, `all_class_names`, and `ignore_index`.
 
-Some modifiers need to compute an index mapping at construction (e.g. `filter_samples` needs to scan to find which indices to keep). This is a lightweight O(n) scan that stores a list of integers, not a copy of the data.
+**`subset`** — random or explicit subset.
 
-### `select_classes`
+```python
+small = subset(dataset, n=500, seed=42)
+# small.num_classes == dataset.num_classes (propagated)
 
-Keeps only the specified classes. Remaining classes are remapped to contiguous indices `[0, n)`. All other pixels become `ignore_index`. Additionally, sets `ood_mask` on each sample: pixels belonging to non-selected classes are marked as OoD.
+explicit = subset(dataset, indices=[0, 3, 7])
+```
+
+**`concat_datasets`** — concatenates multiple datasets. All input datasets must share the same class set (`all_class_names` and `ignore_index` must match).
+
+```python
+combined = concat_datasets([cityscapes_train, bdd100k_train])
+# combined.num_classes == cityscapes_train.num_classes (validated, propagated)
+```
+
+**`filter_samples`** — removes samples based on a predicate. Scans the dataset at construction to compute kept indices.
+
+```python
+# Keep only samples that have at least 10% valid pixels
+filtered = filter_samples(dataset, predicate=lambda img, lbl: (lbl != 255).float().mean() > 0.1)
+```
+
+**`select_classes`** — keeps only samples containing at least one pixel of the specified classes. Pure filter, no label remapping.
+
+```python
+# Keep only images that contain road or car pixels
+with_road_or_car = select_classes(dataset, classes=["road", "car"])
+```
+
+**`hold_out_classes`** — removes samples containing any pixel of the specified classes. Inverse of `select_classes`.
+
+```python
+# Remove any image containing motorcycle pixels
+no_motorcycle = hold_out_classes(dataset, classes=["motorcycle"])
+```
+
+**`hold_out_ood`** — removes samples containing any out-of-distribution pixel (label `>= num_classes` and `!= ignore_index`). Typically used after `mark_as_ood` to create clean training sets.
+
+```python
+train_ds = hold_out_ood(mark_as_ood(full_train, classes=ood_classes))
+```
+
+### Label-Remapping Modifiers
+
+These modify the label space and must update metadata accordingly. They use a `_RemappedDataset` that applies a label lookup table in `__getitem__`.
+
+#### `mark_as_ood`
+
+Marks specified in-distribution classes as out-of-distribution. Keeps all samples. Remaining ID classes are remapped to contiguous `[0, n)`. Marked classes get OoD labels `>= n`. Existing OoD classes and `ignore_index` are preserved.
 
 This serves both training and evaluation in OoD experiments:
-- **Training**: the candidate sees a reduced-class dataset and trains a model with `num_classes` outputs.
-- **Evaluation**: segmentation metrics use the remapped labels (non-selected pixels are ignored). OoD metrics use the `ood_mask`.
+- **Evaluation**: the eval dataset has OoD pixels with labels `>= num_classes`. Segmentation metrics exclude them. OoD detection metrics derive binary targets from `label >= num_classes`.
+- **Training**: apply `hold_out_ood()` after `mark_as_ood()` to remove samples with OoD pixels, giving a clean training set with the same metadata.
 
 ```python
 full_train = CityscapesDataset("./data", split="train")
-reduced_train = select_classes(full_train, keep=["road", "sidewalk", "building", ...])
-# reduced_train.num_classes == 16  (if 3 classes were removed from 19)
-# reduced_train.class_names == ("road", "sidewalk", "building", ...)
-# sample.labels: remapped to [0, 15], others → ignore_index
-# sample.ood_mask: True where original class was not in keep
+ood_classes = ["motorcycle", "bicycle", "train"]
+
+# For evaluation (keeps all samples, OoD pixels labelled >= num_classes)
+eval_ds = mark_as_ood(full_val, classes=ood_classes)
+# eval_ds.num_classes == 16
+# eval_ds.class_names == ("road", "sidewalk", "building", ...)
+# eval_ds.ood_class_names == ("motorcycle", "bicycle", "train")
+
+# For training (same relabelling, then filter out OoD samples)
+train_ds = hold_out_ood(mark_as_ood(full_train, classes=ood_classes))
+# train_ds.num_classes == 16 (same metadata as eval)
 ```
 
 | | |
 |---|---|
-| **Input** | Dataset, list of class names or indices to keep |
-| **`num_classes`** | Number of kept classes |
-| **`class_names`** | Names of kept classes |
-| **Labels** | Remapped to contiguous `[0, n)`, others → `ignore_index` |
-| **`ood_mask`** | `True` for pixels of non-selected classes |
+| **Input** | Dataset, list of class names or indices to mark as OoD |
+| **`num_classes`** | Number of remaining ID classes |
+| **`class_names`** | Names of remaining ID classes |
+| **`ood_class_names`** | Names of newly-OoD classes + any existing OoD classes |
+| **Labels** | ID classes remapped to `[0, n)`, marked classes to `[n, n+k)` |
 
-### `remap_classes`
+#### `remap_classes`
 
-Applies an explicit class index mapping. For non-standard remapping that `select_classes` doesn't cover.
+Applies an explicit class remapping by name. Multiple old classes mapping to the same new name are merged. Unmapped ID classes are preserved as ID with shifted indices. Existing OoD classes are preserved. No class changes its ID/OoD/ignore status.
 
 ```python
-remapped = remap_classes(dataset, mapping={0: 0, 1: 0, 2: 1, 3: 1, 4: 2})
-# Merges classes 0+1 → 0, 2+3 → 1, 4 → 2
-# remapped.num_classes == 3
+remapped = remap_classes(dataset, mapping={
+    "road": "ground", "sidewalk": "ground",
+    "car": "vehicle", "truck": "vehicle",
+    "building": "structure",
+})
+# Mapped classes get new indices in order of first appearance.
+# Unmapped ID classes stay ID, shifted after mapped ones.
 ```
 
 | | |
 |---|---|
-| **Input** | Dataset, mapping dict `{old_index: new_index}` |
-| **`num_classes`** | Number of distinct values in mapping |
-| **Labels** | Remapped per the dict, unmapped classes → `ignore_index` |
+| **Input** | Dataset, mapping dict `{old_name: new_name}` |
+| **`num_classes`** | Number of distinct new names + unmapped ID classes |
+| **`class_names`** | New names (first-appearance order) + unmapped class names |
+| **Labels** | Remapped per the dict, unmapped ID classes shifted |
 
-### `filter_samples`
+### Laziness Model
 
-Removes samples based on a predicate. Computes the index mapping at construction by scanning the dataset.
+All modifiers are lazy on data: `__getitem__` delegates to the wrapped dataset and transforms per-sample on access. No pixel data is copied at construction time.
 
-```python
-# Keep only samples that have at least 10% valid (non-ignore) pixels
-filtered = filter_samples(dataset, predicate=lambda s: (s.labels != 255).mean() > 0.1)
-```
+Some modifiers need to compute an index mapping at construction (e.g. `filter_samples` needs to scan to find which indices to keep). This is a lightweight O(n) scan that stores a list of integers, not a copy of the data.
 
-| | |
-|---|---|
-| **Input** | Dataset, predicate function `SegmentationSample → bool` |
-| **`num_classes`** | Unchanged |
-| **Construction** | Scans dataset once to build index of kept samples |
+## DataLoaders
 
-### `subsample`
+A `torch.utils.data.DataLoader` wraps a Dataset and handles batching, shuffling, parallel loading, and memory management. The dataset provides individual samples via `__getitem__`; the DataLoader groups them into batched tensors ready for the GPU.
 
-Random subset of fixed size.
+In our design, DataLoaders are constructed in two places:
 
-```python
-small = subsample(dataset, n=500, seed=42)
-```
-
-| | |
-|---|---|
-| **Input** | Dataset, number of samples, optional seed |
-| **`num_classes`** | Unchanged |
-| **Construction** | Selects random indices |
-
-### `combine`
-
-Concatenates multiple datasets. All must share the same class set.
-
-```python
-combined = combine(cityscapes_train, bdd100k_train)
-```
-
-| | |
-|---|---|
-| **Input** | Two or more datasets with matching `num_classes` and `class_names` |
-| **`num_classes`** | Unchanged |
-| **Length** | Sum of input lengths |
+- **Training** — the candidate constructs its own DataLoader internally. It controls batch size, shuffle, num_workers — these are training decisions that affect results.
+- **Evaluation** — the experiment script constructs the DataLoader. Batch size is a system/memory concern, not a method decision. The candidate never sees the DataLoader, just the batched tensors it produces.
 
 ## Candidate Lifecycle
 
@@ -204,13 +247,14 @@ class Candidate(Protocol):
     def train(self, dataset: SegmentationDataset) -> None:
         """Train on the given dataset. The candidate owns its full training
         procedure: architecture, optimiser, schedule, augmentation, epochs,
-        everything. The experiment only provides data."""
+        DataLoader construction, everything. The experiment only provides data."""
         ...
 
-    def predict(self, image: np.ndarray) -> SegmentationOutput:
-        """Produce output for a single image. Returns SegmentationOutput
-        or UncertaintyOutput (which extends it). The framework inspects
-        which fields are populated to determine compatible evaluation tests."""
+    def predict(self, images: Tensor) -> SegmentationOutput:
+        """Produce output for a batch of images. Receives a (B, C, H, W)
+        tensor. Returns SegmentationOutput or UncertaintyOutput (which
+        extends it) with batch dimensions. The experiment script inspects
+        which fields are populated to determine compatible metrics."""
         ...
 
     def save(self, path: Path) -> None:
@@ -230,15 +274,16 @@ class Candidate(Protocol):
 
 - **Architecture** — the model, number of parameters, structure.
 - **Training procedure** — optimiser, learning rate schedule, loss function, number of epochs, batch size.
+- **Data loading for training** — constructing a `DataLoader` from the provided `SegmentationDataset`, including batch size, shuffle, and num_workers.
 - **Augmentation** — training-time transforms applied to the raw data from the dataset.
 - **Inference procedure** — how raw model output becomes a `SegmentationOutput` or `UncertaintyOutput`. MC Dropout does N forward passes. An ensemble averages M members. A softmax baseline does a single pass.
-- **Internal data loading** — wrapping the `SegmentationDataset` protocol into a PyTorch `DataLoader` (or whatever the framework-specific equivalent is).
 
 ### What the Candidate Does Not Own
 
 - **What data to train on** — the experiment decides.
-- **What to evaluate** — the framework matches output fields to compatible tests.
+- **What to evaluate** — the experiment script decides which metrics to run and which output fields to use.
 - **Where to save state** — the experiment decides the path.
+- **Evaluation data loading** — the experiment script owns the eval DataLoader.
 
 ### Pre-trained Candidates
 
@@ -262,51 +307,32 @@ candidate.load(Path("./checkpoints/ensemble_r50"))
 
 ## Experiments as Code
 
-An experiment is a Python script that composes datasets, candidates, and evaluation. The framework provides building blocks; the experiment author decides how to wire them.
+An experiment is a Python script that composes datasets, candidates, and evaluation. The library provides building blocks; the experiment author writes the eval loop directly.
 
-### Example: Standard Benchmark
+### Example: Standard Evaluation
 
-Train all candidates on Cityscapes train, evaluate on Cityscapes test.
-
-```python
-from segspicious.datasets import CityscapesDataset
-from segspicious.candidates import SoftmaxCandidate, EnsembleCandidate, MCDropoutCandidate
-from segspicious.evaluation import run_benchmark
-
-train_data = CityscapesDataset("./data/cityscapes", split="train")
-test_data  = CityscapesDataset("./data/cityscapes", split="test")
-
-candidates = [
-    SoftmaxCandidate(name="softmax_r50",  backbone="resnet50", epochs=100),
-    EnsembleCandidate(name="ensemble_r50", backbone="resnet50", n_members=5, epochs=100),
-    MCDropoutCandidate(name="mcdrop_r50",  backbone="resnet50", n_samples=20, epochs=100),
-]
-
-for c in candidates:
-    c.train(train_data)
-
-results = run_benchmark(candidates, test_data)
-results.print_table()
-```
-
-### Example: Cross-Dataset Generalisation
-
-Train on Cityscapes, evaluate on BDD100K to measure domain shift.
+Train a candidate on Cityscapes train, evaluate on Cityscapes test.
 
 ```python
-train_data = CityscapesDataset("./data/cityscapes", split="train")
-bdd_test   = BDD100KDataset("./data/bdd100k", split="test")
+import torch
+from torch.utils.data import DataLoader
+from segspicious.metrics import IoU, PixelAccuracy
 
-candidates = [
-    SoftmaxCandidate(name="softmax_r50", backbone="resnet50", epochs=100),
-    EnsembleCandidate(name="ensemble_r50", backbone="resnet50", n_members=5, epochs=100),
-]
+# ... construct train_data, test_data, candidate ...
 
-for c in candidates:
-    c.train(train_data)
+candidate.train(train_data)
 
-results = run_benchmark(candidates, bdd_test)
-results.print_table()
+iou = IoU(num_classes=test_data.num_classes, ignore_index=test_data.ignore_index)
+acc = PixelAccuracy(num_classes=test_data.num_classes, ignore_index=test_data.ignore_index)
+
+loader = DataLoader(test_data, batch_size=4)
+for images, labels in loader:
+    output = candidate.predict(images)
+    iou.update(output, labels)
+    acc.update(output, labels)
+
+print(iou.compute())
+print(acc.compute())
 ```
 
 ### Example: OoD Detection with Held-Out Classes
@@ -314,91 +340,73 @@ results.print_table()
 Train on a reduced class set, evaluate OoD detection on held-out classes.
 
 ```python
-from segspicious.datasets import CityscapesDataset, select_classes
+from segspicious.datasets import CityscapesDataset, mark_as_ood, hold_out_ood
 
-all_classes = CityscapesDataset.CLASS_NAMES
-ood_classes = ("motorcycle", "bicycle", "train")
-id_classes  = tuple(c for c in all_classes if c not in ood_classes)
+ood_classes = ["motorcycle", "bicycle", "train"]
 
-train_data = select_classes(CityscapesDataset("./data/cityscapes", split="train"), keep=id_classes)
-eval_data  = select_classes(CityscapesDataset("./data/cityscapes", split="val"),   keep=id_classes)
-# eval_data.ood_mask marks motorcycle/bicycle/train pixels as OoD
-# eval_data.labels has OoD pixels set to ignore_index (excluded from mIoU)
+# Evaluation dataset: all samples, OoD classes relabelled >= num_classes
+eval_data = mark_as_ood(
+    CityscapesDataset("./data/cityscapes", split="val"),
+    classes=ood_classes,
+)
 # eval_data.num_classes == 16
+# eval_data.ood_class_names == ("motorcycle", "bicycle", "train")
 
-candidates = [
-    SoftmaxCandidate(name="softmax_r50", backbone="resnet50", epochs=100),
-    EnsembleCandidate(name="ensemble_r50", backbone="resnet50", n_members=5, epochs=100),
-    DDUCandidate(name="ddu_r50", backbone="resnet50", epochs=100),
-]
+# Training dataset: same relabelling, then remove samples with OoD pixels
+train_data = hold_out_ood(
+    mark_as_ood(
+        CityscapesDataset("./data/cityscapes", split="train"),
+        classes=ood_classes,
+    )
+)
 
-for c in candidates:
-    c.train(train_data)
+candidate.train(train_data)
 
-results = run_benchmark(candidates, eval_data)
-# Segmentation tests use remapped labels (16 classes, OoD pixels ignored)
-# OoD detection tests use ood_mask
-results.print_table()
+# Eval loop with both segmentation and OoD metrics
+iou = IoU(num_classes=eval_data.num_classes, ignore_index=eval_data.ignore_index)
+ood_auroc = OoDDetection()
+
+loader = DataLoader(eval_data, batch_size=4)
+for images, labels in loader:
+    output = candidate.predict(images)
+    iou.update(output, labels)
+    ood_target = ((labels >= eval_data.num_classes) & (labels != eval_data.ignore_index)).long()
+    if output.predictive_uncertainty is not None:
+        ood_auroc.update(output.predictive_uncertainty, ood_target)
+
+print(iou.compute())
+print(ood_auroc.compute())
 ```
 
 ### Example: Train Once, Evaluate Multiple Scenarios
 
 ```python
+from segspicious.datasets import subset
+
 train_data = CityscapesDataset("./data/cityscapes", split="train")
 
-candidates = [...]
-for c in candidates:
-    c.train(train_data)
-    c.save(Path(f"./checkpoints/{c.name}"))
+candidate.train(train_data)
+candidate.save(Path("./checkpoints/softmax_r50"))
 
-# Scenario 1: in-distribution test performance
-id_results = run_benchmark(candidates, CityscapesDataset("./data/cityscapes", split="val"))
+# Scenario 1: in-distribution
+eval_id(candidate, CityscapesDataset("./data/cityscapes", split="val"))
 
 # Scenario 2: domain shift
-shift_results = run_benchmark(candidates, BDD100KDataset("./data/bdd100k", split="val"))
-
-# Scenario 3: reduced dataset to test data efficiency
-small_train = subsample(train_data, n=500, seed=42)
-for c in candidates:
-    c_small = type(c)(**c.config)  # fresh copy, same config
-    c_small.train(small_train)
-# ...evaluate c_small...
+eval_id(candidate, BDD100KDataset("./data/bdd100k", split="val"))
 ```
 
-## Relationship to Evaluation
+The eval loops are short enough to write inline or extract into local helper functions within the experiment. If patterns stabilise across many experiments, they can be promoted into the library later.
 
-The evaluation framework (see `segmentation_design.md`, `uq_design.md`) operates on `(candidate_output, ground_truth)` pairs. `run_benchmark` bridges the gap:
+## Relationship to Metrics
 
-1. Iterates over the evaluation dataset.
-2. Calls `candidate.predict(sample.image)` on each sample.
-3. Pairs the output with ground truth from the sample (`sample.labels`, `sample.ood_mask`).
-4. Runs all compatible evaluation tests (determined by which output fields are populated and which ground truth is available).
-5. Aggregates and returns the results matrix.
+The metrics (see `segmentation_design.md`, `uq_design.md`, `metrics_api.md`) use torchmetrics and torch-uncertainty.metrics, which accumulate results across batches via `.update()` / `.compute()`. The experiment script owns the eval loop:
 
-The evaluation tests themselves are unchanged — they don't know about datasets or candidates. They receive outputs and ground truth and compute metrics.
+1. Constructs a `DataLoader` from the evaluation dataset.
+2. Iterates batches. For each batch:
+   a. Unpacks `(images, labels)` from the DataLoader.
+   b. Calls `candidate.predict(images)` → batched `SegmentationOutput` or `UncertaintyOutput`.
+   c. Derives any needed ground truth (e.g. OoD binary targets from the label convention).
+   d. Calls `.update()` on the relevant metrics.
+3. Calls `.compute()` on each metric to get final aggregated results.
 
-## PyTorch Interop
-
-Since most candidates will use PyTorch internally, the framework provides a utility to bridge the protocol into PyTorch's data loading:
-
-```python
-class TorchDatasetAdapter(torch.utils.data.Dataset):
-    """Wraps a SegmentationDataset for use with torch.utils.data.DataLoader."""
-
-    def __init__(self, dataset: SegmentationDataset, transform=None):
-        self._dataset = dataset
-        self._transform = transform
-
-    def __len__(self):
-        return len(self._dataset)
-
-    def __getitem__(self, index):
-        sample = self._dataset[index]
-        image = torch.from_numpy(sample.image).permute(2, 0, 1).float() / 255.0
-        labels = torch.from_numpy(sample.labels).long()
-        if self._transform:
-            image, labels = self._transform(image, labels)
-        return image, labels
-```
-
-This adapter (or something like it) lives in the framework as a utility. Candidates can use it or roll their own. It is not part of the protocol.
+The metrics themselves are stateless between runs — they don't know about datasets or candidates. They accumulate `(output, ground_truth)` pairs batch by batch and compute aggregate statistics at the end.

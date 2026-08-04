@@ -1,15 +1,6 @@
-"segspicious — protocols, modifiers, and metrics for segmentation UQ benchmarking."
+"""Segspicious: benchmarking segmentation uncertainty quantification."""
 
-from segspicious.candidate import Candidate, SegmentationOutput, UncertaintyOutput
-from segspicious.dataset import SegmentationDataset, SegmentationSample, Split
-from segspicious.torch_adapter import TorchDatasetAdapter
+from segspicious.candidate import Candidate
+from segspicious.outputs import SegmentationOutput, UncertaintyOutput
 
-__all__ = [
-    "Candidate",
-    "SegmentationDataset",
-    "SegmentationOutput",
-    "SegmentationSample",
-    "Split",
-    "TorchDatasetAdapter",
-    "UncertaintyOutput",
-]
+__all__ = ["Candidate", "SegmentationOutput", "UncertaintyOutput"]

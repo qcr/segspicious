@@ -14,9 +14,14 @@ torchvision = "*"
 tqdm = "*"
 matplotlib = "*"
 hatchling = "*"
+torchmetrics = ">=1.9.0,<2"
 
 [pypi-dependencies]
 segspicious = { path = ".", editable = true }
+segspicious-experiments = { path = "experiments", editable = true }
+torch-uncertainty = ">=0.13.0, <0.14"
+lightning = ">=2.6.5, <3"
+rich = ">=15.0.0, <16"
 
 [feature.dev.dependencies]
 pytest = "*"
@@ -25,4 +30,4 @@ pytest = "*"
 default = { features = ["dev"], solve-group = "default" }
 
 [tasks]
-test = "pytest segspicious/tests/ -v"
+test = "pytest segspicious/tests/ experiments/ -v"
