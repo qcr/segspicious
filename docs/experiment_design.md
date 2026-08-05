@@ -1,10 +1,10 @@
 # Experiment Design
 
-Datasets, candidates, and experiment composition.
+Datasets, models, candidates, and experiment composition.
 
 ## Philosophy
 
-Experiments are defined in code. There is no configuration language, no YAML schema, no registry of experiment types. The library provides clean building blocks — datasets, modifiers, output types, metrics, and the candidate protocol — and the experiment author composes them in a Python script. The experiment script owns the eval loop: it constructs a DataLoader, iterates batches, calls `predict()`, feeds results into metrics, and prints the output. This keeps the library focused on composable primitives and lets experiment scripts evolve freely without premature abstraction.
+Experiments are defined in code. There is no configuration language, no YAML schema, no registry of experiment types. The library provides clean building blocks — datasets, modifiers, output types, metrics, and the model protocol — and the experiment author composes them in a Python script. The experiment script owns the eval loop: it constructs a DataLoader, iterates batches, calls `predict()`, feeds results into metrics, and prints the output. This keeps the library focused on composable primitives and lets experiment scripts evolve freely without premature abstraction.
 
 ## SegmentationDataset
 
@@ -12,6 +12,9 @@ The dataset base class. Extends `torch.utils.data.Dataset` to add required segme
 
 ```python
 class SegmentationDataset(torch.utils.data.Dataset):
+    @property
+    def name(self) -> str: ...
+
     @property
     def num_classes(self) -> int: ...
 
@@ -39,11 +42,21 @@ class SegmentationDataset(torch.utils.data.Dataset):
     def has_ood_classes(self) -> bool: ...
 ```
 
+### Dataset Naming
+
+Every dataset has a `name` property used for checkpoint path derivation and results identification. Base datasets set the root name (`cityscapes_train`, `wildscenes2d_K01_val`). Modifiers append suffixes describing the transformation:
+
+```
+wildscenes2d_train-subset[n=100,seed=42]-mark_ood[bicycle+motorcycle]-hold_out_ood
+```
+
+See `model_candidate_design.md` for the full naming convention.
+
 ### Return Format
 
 Each sample is a tuple of two tensors:
 
-- **image** — `(C, H, W)` float tensor. Channels-first, following PyTorch convention. No normalisation, no augmentation — raw pixels scaled to `[0, 1]`. The candidate is responsible for any preprocessing it needs.
+- **image** — `(C, H, W)` float tensor. Channels-first, following PyTorch convention. No normalisation, no augmentation — raw pixels scaled to `[0, 1]`. The model is responsible for any preprocessing it needs.
 - **labels** — `(H, W)` long tensor. Per-pixel class index with three zones:
   - `[0, num_classes)` — valid in-distribution class labels
   - `[num_classes, num_classes + num_ood_classes)` — out-of-distribution class labels (preserving class identity)
@@ -66,9 +79,9 @@ At evaluation time, the experiment script derives binary OoD targets from this c
 
 **A dataset is a split.** `CityscapesDataset(root, split='train')` and `CityscapesDataset(root, split='test')` are two separate dataset objects. There is no container that holds both. The experiment composes them explicitly. This is simpler, and it composes naturally: if you want to train on Cityscapes train and evaluate on BDD100K test, those are just two independent objects passed to different functions.
 
-**No transforms.** The dataset provides raw, unprocessed data. Augmentation, normalisation, resizing — all of that is the candidate's responsibility. Different candidates need different preprocessing; the dataset should not impose any.
+**No transforms.** The dataset provides raw, unprocessed data. Augmentation, normalisation, resizing — all of that is the model's responsibility. Different models need different preprocessing; the dataset should not impose any.
 
-**Metadata is required.** `num_classes`, `class_names`, and `ignore_index` are abstract properties on the dataset, not external configuration. The candidate and evaluation runner need to know these, and they should come from the dataset. `all_class_names`, `ood_class_names`, `num_ood_classes`, and `has_ood_classes` are derived automatically. `all_class_names` defaults to `class_names` (no OoD) and is overridden by modifiers like `mark_as_ood` that introduce OoD classes. Because `SegmentationDataset` is a base class (not a protocol), metadata propagates naturally through dataset modifiers that subclass it.
+**Metadata is required.** `name`, `num_classes`, `class_names`, and `ignore_index` are abstract properties on the dataset, not external configuration. The model and evaluation runner need to know these, and they should come from the dataset. `all_class_names`, `ood_class_names`, `num_ood_classes`, and `has_ood_classes` are derived automatically. `all_class_names` defaults to `class_names` (no OoD) and is overridden by modifiers like `mark_as_ood` that introduce OoD classes. Because `SegmentationDataset` is a base class (not a protocol), metadata propagates naturally through dataset modifiers that subclass it.
 
 ### Concrete Datasets
 
@@ -79,9 +92,14 @@ class CityscapesDataset(SegmentationDataset):
     """Wraps torchvision.datasets.Cityscapes."""
 
     def __init__(self, root: str, split: str = "train"):
+        self._split = split
         self._dataset = torchvision.datasets.Cityscapes(
             root, split=split, mode="fine", target_type="semantic"
         )
+
+    @property
+    def name(self) -> str:
+        return f"cityscapes_{self._split}"
 
     @property
     def num_classes(self) -> int:
@@ -109,10 +127,11 @@ Adding a new dataset means extending `SegmentationDataset`. Most implementations
 
 ## Dataset Modifiers
 
-Modifiers take a `SegmentationDataset` and return a new `SegmentationDataset`. They compose: the output of one modifier is valid input to another.
+Modifiers take a `SegmentationDataset` and return a new `SegmentationDataset`. They compose: the output of one modifier is valid input to another. Each modifier appends to the dataset's `name`.
 
-```
-mark_as_ood(subset(cityscapes_train, n=500, seed=42), classes=["motorcycle", "bicycle"])
+```python
+ds = mark_as_ood(subset(cityscapes_train, n=500, seed=42), classes=["motorcycle", "bicycle"])
+# ds.name == "cityscapes_train-subset[n=500,seed=42]-mark_ood[bicycle+motorcycle]"
 ```
 
 ### Filter-Based Modifiers
@@ -123,7 +142,7 @@ Several operations are pure filters — they change which samples are included b
 
 ```python
 small = subset(dataset, n=500, seed=42)
-# small.num_classes == dataset.num_classes (propagated)
+# small.name == "cityscapes_train-subset[n=500,seed=42]"
 
 explicit = subset(dataset, indices=[0, 3, 7])
 ```
@@ -132,27 +151,29 @@ explicit = subset(dataset, indices=[0, 3, 7])
 
 ```python
 combined = concat_datasets([cityscapes_train, bdd100k_train])
-# combined.num_classes == cityscapes_train.num_classes (validated, propagated)
+# combined.name == "cityscapes_train+bdd100k_train"
 ```
 
-**`filter_samples`** — removes samples based on a predicate. Scans the dataset at construction to compute kept indices.
+**`filter_samples`** — removes samples based on a predicate. Scans the dataset at construction to compute kept indices. Requires a `label` parameter for naming since the predicate has no string representation.
 
 ```python
-# Keep only samples that have at least 10% valid pixels
-filtered = filter_samples(dataset, predicate=lambda img, lbl: (lbl != 255).float().mean() > 0.1)
+filtered = filter_samples(
+    dataset,
+    predicate=lambda img, lbl: (lbl != 255).float().mean() > 0.1,
+    label="min10pct_valid",
+)
+# filtered.name == "cityscapes_train-filter[min10pct_valid]"
 ```
 
 **`select_classes`** — keeps only samples containing at least one pixel of the specified classes. Pure filter, no label remapping.
 
 ```python
-# Keep only images that contain road or car pixels
 with_road_or_car = select_classes(dataset, classes=["road", "car"])
 ```
 
 **`hold_out_classes`** — removes samples containing any pixel of the specified classes. Inverse of `select_classes`.
 
 ```python
-# Remove any image containing motorcycle pixels
 no_motorcycle = hold_out_classes(dataset, classes=["motorcycle"])
 ```
 
@@ -224,53 +245,43 @@ All modifiers are lazy on data: `__getitem__` delegates to the wrapped dataset a
 
 Some modifiers need to compute an index mapping at construction (e.g. `filter_samples` needs to scan to find which indices to keep). This is a lightweight O(n) scan that stores a list of integers, not a copy of the data.
 
+Dataset construction is cheap. This matters because both train and eval scripts construct the same dataset objects (the code is the configuration) — only `__getitem__` is expensive.
+
 ## DataLoaders
 
 A `torch.utils.data.DataLoader` wraps a Dataset and handles batching, shuffling, parallel loading, and memory management. The dataset provides individual samples via `__getitem__`; the DataLoader groups them into batched tensors ready for the GPU.
 
 In our design, DataLoaders are constructed in two places:
 
-- **Training** — the candidate constructs its own DataLoader internally. It controls batch size, shuffle, num_workers — these are training decisions that affect results.
-- **Evaluation** — the experiment script constructs the DataLoader. Batch size is a system/memory concern, not a method decision. The candidate never sees the DataLoader, just the batched tensors it produces.
+- **Training** — the model constructs its own DataLoader internally. It controls batch size, shuffle, num_workers — these are training decisions that affect results.
+- **Evaluation** — the experiment script constructs the DataLoader. Batch size is a system/memory concern, not a method decision. The model never sees the DataLoader, just the batched tensors it produces.
 
-## Candidate Lifecycle
+## Models and Candidates
 
-A candidate is the unit of comparison (see `segmentation_design.md`, `uq_design.md`). The lifecycle is: **construct → train → save → load → predict → evaluate**.
+A **model** is an architecture + training recipe + inference logic. A **candidate** is a model trained on a specific dataset — the unit of comparison in an experiment. See `model_candidate_design.md` for the full design.
+
+### Model Protocol
+
+Models have no constructor arguments. The class is the configuration.
 
 ```python
-class Candidate(Protocol):
+class Model(Protocol):
     @property
-    def name(self) -> str:
-        """Identifier for results tables and saved state."""
-        ...
+    def name(self) -> str: ...
 
-    def train(self, dataset: SegmentationDataset) -> None:
-        """Train on the given dataset. The candidate owns its full training
-        procedure: architecture, optimiser, schedule, augmentation, epochs,
-        DataLoader construction, everything. The experiment only provides data."""
-        ...
+    def train(
+        self,
+        dataset: SegmentationDataset,
+        validation_data: SegmentationDataset | None = None,
+    ) -> None: ...
 
-    def predict(self, images: Tensor) -> SegmentationOutput:
-        """Produce output for a batch of images. Receives a (B, C, H, W)
-        tensor. Returns SegmentationOutput or UncertaintyOutput (which
-        extends it) with batch dimensions. The experiment script inspects
-        which fields are populated to determine compatible metrics."""
-        ...
+    def predict(self, images: Tensor) -> SegmentationOutput: ...
 
-    def save(self, path: Path) -> None:
-        """Serialise learned state to disk. Only learned state — the
-        candidate's configuration (architecture, hyperparameters) lives
-        in the experiment code that constructs the candidate object."""
-        ...
-
-    def load(self, path: Path) -> None:
-        """Load learned state from disk. The candidate object must already
-        exist (constructed with matching configuration). This mirrors
-        PyTorch's model.load_state_dict(torch.load(path)) pattern."""
-        ...
+    def save(self, path: Path) -> None: ...
+    def load(self, path: Path) -> None: ...
 ```
 
-### What the Candidate Owns
+### What the Model Owns
 
 - **Architecture** — the model, number of parameters, structure.
 - **Training procedure** — optimiser, learning rate schedule, loss function, number of epochs, batch size.
@@ -278,49 +289,80 @@ class Candidate(Protocol):
 - **Augmentation** — training-time transforms applied to the raw data from the dataset.
 - **Inference procedure** — how raw model output becomes a `SegmentationOutput` or `UncertaintyOutput`. MC Dropout does N forward passes. An ensemble averages M members. A softmax baseline does a single pass.
 
-### What the Candidate Does Not Own
+### What the Model Does Not Own
 
 - **What data to train on** — the experiment decides.
 - **What to evaluate** — the experiment script decides which metrics to run and which output fields to use.
-- **Where to save state** — the experiment decides the path.
+- **Where to save state** — the framework derives checkpoint paths from model and dataset identity.
 - **Evaluation data loading** — the experiment script owns the eval DataLoader.
 
-### Pre-trained Candidates
+### Candidate
 
-A candidate that wraps a pre-trained model implements `train()` as a no-op (or as loading pre-trained weights). The lifecycle is the same — the experiment always calls `train()`, some candidates just don't need it.
+A framework-level object that pairs a trained model with the dataset it was trained on. Not user-implemented. Delegates `predict()` to the model.
+
+```python
+candidate = train_or_load(DeepLabV3RN50(), train_data, validation_data=val_data)
+output = candidate.predict(images)
+```
+
+### Framework Functions
+
+```python
+train(model, dataset, validation_data=None) -> Candidate
+load(model, dataset) -> Candidate
+train_or_load(model, dataset, validation_data=None) -> Candidate
+```
+
+`train_or_load` loads from cache if a checkpoint exists, otherwise trains and saves. Checkpoint paths are derived from `model.name` and `dataset.name`. The user never specifies paths.
+
+### Pre-trained Models
+
+A model that wraps a pre-trained network implements `train()` as a no-op (or as loading pre-trained weights). The lifecycle is the same — the framework always calls `train()`, some models just don't need it.
 
 ### Cross-machine Training and Evaluation
 
-The `save`/`load` interface enables training on one machine and evaluating on another. Only learned state is serialised. The experiment code (which constructs the candidate with its configuration) must be present on both machines.
+The code is the configuration. Train and eval scripts import the same data preparation module, constructing the same dataset objects. Same code → same dataset names → same checkpoint paths.
 
 ```python
-# train.py — runs on GPU machine
-candidate = EnsembleCandidate(backbone="resnet50", n_members=5, epochs=100, lr=0.01)
-candidate.train(train_data)
-candidate.save(Path("./checkpoints/ensemble_r50"))
+# experiments/ood_bench/data.py — shared module
+def cityscapes_ood():
+    ood_classes = ["motorcycle", "bicycle", "train"]
+    train_ds = hold_out_ood(mark_as_ood(
+        CityscapesDataset("./data/cityscapes", split=Split.TRAIN),
+        classes=ood_classes,
+    ))
+    val_ds = mark_as_ood(
+        CityscapesDataset("./data/cityscapes", split=Split.VAL),
+        classes=ood_classes,
+    )
+    return train_ds, val_ds
 
-# eval.py — runs on a different machine
-candidate = EnsembleCandidate(backbone="resnet50", n_members=5, epochs=100, lr=0.01)
-candidate.load(Path("./checkpoints/ensemble_r50"))
-# candidate is now ready for predict()
+# train.py — GPU machine
+from experiments.ood_bench.data import cityscapes_ood
+train_ds, val_ds = cityscapes_ood()
+candidate = train(DeepLabV3RN50(), train_ds, validation_data=val_ds)
+
+# eval.py — different machine
+from experiments.ood_bench.data import cityscapes_ood
+train_ds, val_ds = cityscapes_ood()
+candidate = load(DeepLabV3RN50(), train_ds)
 ```
 
 ## Experiments as Code
 
-An experiment is a Python script that composes datasets, candidates, and evaluation. The library provides building blocks; the experiment author writes the eval loop directly.
+An experiment is a Python script that composes datasets, models, and evaluation. The library provides building blocks; the experiment author writes the eval loop directly.
 
 ### Example: Standard Evaluation
-
-Train a candidate on Cityscapes train, evaluate on Cityscapes test.
 
 ```python
 import torch
 from torch.utils.data import DataLoader
 from segspicious.metrics import IoU, PixelAccuracy
 
-# ... construct train_data, test_data, candidate ...
+train_data = CityscapesDataset("./data/cityscapes", split=Split.TRAIN)
+test_data = CityscapesDataset("./data/cityscapes", split=Split.TEST)
 
-candidate.train(train_data)
+candidate = train_or_load(DeepLabV3RN50(), train_data)
 
 iou = IoU(num_classes=test_data.num_classes, ignore_index=test_data.ignore_index)
 acc = PixelAccuracy(num_classes=test_data.num_classes, ignore_index=test_data.ignore_index)
@@ -337,22 +379,16 @@ print(acc.compute())
 
 ### Example: OoD Detection with Held-Out Classes
 
-Train on a reduced class set, evaluate OoD detection on held-out classes.
-
 ```python
 from segspicious.datasets import CityscapesDataset, mark_as_ood, hold_out_ood
 
 ood_classes = ["motorcycle", "bicycle", "train"]
 
-# Evaluation dataset: all samples, OoD classes relabelled >= num_classes
 eval_data = mark_as_ood(
     CityscapesDataset("./data/cityscapes", split="val"),
     classes=ood_classes,
 )
-# eval_data.num_classes == 16
-# eval_data.ood_class_names == ("motorcycle", "bicycle", "train")
 
-# Training dataset: same relabelling, then remove samples with OoD pixels
 train_data = hold_out_ood(
     mark_as_ood(
         CityscapesDataset("./data/cityscapes", split="train"),
@@ -360,9 +396,8 @@ train_data = hold_out_ood(
     )
 )
 
-candidate.train(train_data)
+candidate = train_or_load(DeepLabV3RN50(), train_data)
 
-# Eval loop with both segmentation and OoD metrics
 iou = IoU(num_classes=eval_data.num_classes, ignore_index=eval_data.ignore_index)
 ood_auroc = OoDDetection()
 
@@ -378,21 +413,20 @@ print(iou.compute())
 print(ood_auroc.compute())
 ```
 
-### Example: Train Once, Evaluate Multiple Scenarios
+### Example: Multiple Models, Same Dataset
 
 ```python
-from segspicious.datasets import subset
-
 train_data = CityscapesDataset("./data/cityscapes", split="train")
+val_data = CityscapesDataset("./data/cityscapes", split="val")
 
-candidate.train(train_data)
-candidate.save(Path("./checkpoints/softmax_r50"))
+candidates = [
+    train_or_load(DeepLabV3RN50(), train_data),
+    train_or_load(EnsembleDeepLabV3(), train_data),
+    train_or_load(MCDropoutDeepLabV3(), train_data),
+]
 
-# Scenario 1: in-distribution
-eval_id(candidate, CityscapesDataset("./data/cityscapes", split="val"))
-
-# Scenario 2: domain shift
-eval_id(candidate, BDD100KDataset("./data/bdd100k", split="val"))
+for candidate in candidates:
+    eval_segmentation(candidate, val_data)
 ```
 
 The eval loops are short enough to write inline or extract into local helper functions within the experiment. If patterns stabilise across many experiments, they can be promoted into the library later.
@@ -409,4 +443,4 @@ The metrics (see `segmentation_design.md`, `uq_design.md`, `metrics_api.md`) use
    d. Calls `.update()` on the relevant metrics.
 3. Calls `.compute()` on each metric to get final aggregated results.
 
-The metrics themselves are stateless between runs — they don't know about datasets or candidates. They accumulate `(output, ground_truth)` pairs batch by batch and compute aggregate statistics at the end.
+The metrics themselves are stateless between runs — they don't know about datasets or models. They accumulate `(output, ground_truth)` pairs batch by batch and compute aggregate statistics at the end.

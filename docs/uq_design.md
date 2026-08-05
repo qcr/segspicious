@@ -4,11 +4,11 @@ Evaluating uncertainty estimation methods in semantic segmentation.
 
 ## Core Concept
 
-The unit of comparison is the **candidate**: a complete pipeline from input image to a standardised uncertainty output. Each candidate populates only the fields it meaningfully provides. The experiment script decides which metrics to run based on which output fields are populated.
+The unit of comparison is the **candidate**: a model trained on a specific dataset (see `model_candidate_design.md`). Each model populates only the output fields it can meaningfully provide. The experiment script decides which metrics to run based on which fields are populated.
 
 ## Uncertainty Output
 
-Every candidate's `predict()` method receives a batch of images as a `(B, C, H, W)` tensor and returns an `UncertaintyOutput` — a dataclass that extends `SegmentationOutput` (see `segmentation_design.md`) with five optional uncertainty fields. UQ candidates inherit `prediction` and are automatically evaluated on segmentation tests as well.
+A candidate's `predict()` method receives a batch of images as a `(B, C, H, W)` tensor and returns an `UncertaintyOutput` — a dataclass that extends `SegmentationOutput` (see `segmentation_design.md`) with five optional uncertainty fields. UQ models inherit `prediction` and are automatically evaluated on segmentation tests as well.
 
 All tensors follow PyTorch conventions: channels-first, with a batch dimension.
 
@@ -33,19 +33,19 @@ UncertaintyOutput(SegmentationOutput):
 - **epistemic_uncertainty** — uncertainty due to limited training data or model capacity. Can be reduced by training on more data. Measures what the model doesn't know.
 - **ood_score** — how unlike training data this input is. Not a measure of prediction quality — a measure of input familiarity. Includes density-based methods (Mahalanobis, KNN) and energy-based scores.
 
-### Candidate Responsibility
+### Model Responsibility
 
-The candidate is the semantic bridge between a model's raw output and the standardised fields. It must only populate fields it can meaningfully provide:
+The model is the semantic bridge between raw neural network output and the standardised fields. It must only populate fields it can meaningfully provide:
 
 - An ensemble computes MI from member disagreement → `epistemic_uncertainty`. It does not put MI into `ood_score` even though MI correlates with OoD-ness.
 - An SSN samples model aleatoric variation, not parameter variation → it populates `aleatoric_uncertainty` but not `epistemic_uncertainty`, even though the underlying math (sample disagreement) looks similar.
 - An energy score computes -LogSumExp(logits) → `ood_score`. It does not populate `predictive_uncertainty` even though it has access to the same logits.
 
-The candidate author knows what their method measures. The experiment trusts that labelling.
+The model author knows what their method measures. The experiment trusts that labelling.
 
 ## Evaluation Tests
 
-Each test declares which output fields it accepts. All metrics use torchmetrics and torch-uncertainty.metrics, which accumulate across batches via `.update()` / `.compute()`. The experiment script is responsible for checking which fields a candidate provides and routing them to the appropriate metrics.
+Each test declares which output fields it accepts. All metrics use torchmetrics and torch-uncertainty.metrics, which accumulate across batches via `.update()` / `.compute()`. The experiment script is responsible for checking which fields a model provides and routing them to the appropriate metrics.
 
 ### OoD Detection
 
@@ -58,7 +58,7 @@ Separates in-distribution pixels from out-of-distribution pixels. OoD ground tru
 | **Metrics** | AUROC, AUPR, FPR@95TPR |
 | **Implementation** | `torch-uncertainty` `SegmentationBinaryAUROC`, `SegmentationBinaryAveragePrecision`, `SegmentationFPR95` |
 
-Runs independently for each populated field — a candidate with both `epistemic_uncertainty` and `ood_score` produces two sets of metrics.
+Runs independently for each populated field — a model with both `epistemic_uncertainty` and `ood_score` produces two sets of metrics.
 
 The torch-uncertainty segmentation OoD metrics are **image-averaged**: AUROC / FPR95 is computed per image then averaged across the batch. This is the convention in the dense OoD-detection literature and behaves better than computing over flattened pixels when image sizes or OoD prevalences vary.
 
@@ -104,7 +104,7 @@ Evaluates whether uncertainty scores identify the most informative samples to la
 | **Ground truth** | Evaluated indirectly via learning curves after retraining |
 | **Metrics** | Learning curve AUC, performance at fixed budget |
 
-## Candidate Examples
+## Model Examples
 
 ```
 Softmax Baseline:
@@ -150,7 +150,7 @@ DDU:
 
 ## Results Matrix
 
-A typical experiment might produce a table of candidates × (test, field) pairs:
+A typical experiment might produce a table of candidates (model × dataset) against (test, field) pairs:
 
 ```
                      OoD     OoD     OoD    Fail    Fail     Calib   ...

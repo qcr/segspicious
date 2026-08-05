@@ -4,7 +4,7 @@ Summary of key decisions made during the PyTorch-native redesign, and the reason
 
 ## PyTorch-Native Over Framework-Agnostic
 
-The original design kept the dataset layer framework-agnostic (numpy arrays, custom protocol, adapter to bridge into PyTorch). We decided to go fully PyTorch-native because every candidate will be PyTorch-based and the framework-agnostic benefit was theoretical. This unlocks:
+The original design kept the dataset layer framework-agnostic (numpy arrays, custom protocol, adapter to bridge into PyTorch). We decided to go fully PyTorch-native because every model will be PyTorch-based and the framework-agnostic benefit was theoretical. This unlocks:
 
 - `torch.utils.data.DataLoader` for batching, shuffling, parallel loading, pinned memory — no adapter needed.
 - `torch.utils.data.Subset` and `ConcatDataset` for dataset operations — no custom reimplementation.
@@ -52,10 +52,10 @@ The original `predict(image: np.ndarray) → SegmentationOutput` was single-imag
 
 ## Train Gets a Dataset, Predict Gets Tensors
 
-There's an asymmetry in the candidate interface:
+There's an asymmetry in the model interface:
 
-- **`train(dataset: SegmentationDataset)`** — the candidate receives a Dataset and constructs its own DataLoader internally. This is because batch size, shuffle strategy, augmentation, and sampler are all training decisions that affect results. The candidate must own them.
-- **`predict(images: Tensor)`** — the candidate receives raw batched tensors. The experiment script owns the eval DataLoader because batch size for inference is a system/memory concern, not a method decision. The candidate just processes whatever batch it receives.
+- **`train(dataset: SegmentationDataset)`** — the model receives a Dataset and constructs its own DataLoader internally. This is because batch size, shuffle strategy, augmentation, and sampler are all training decisions that affect results. The model must own them.
+- **`predict(images: Tensor)`** — the model receives raw batched tensors. The experiment script owns the eval DataLoader because batch size for inference is a system/memory concern, not a method decision. The model just processes whatever batch it receives.
 
 This matches the PyTorch Lightning pattern: `training_step` owns data loading via the DataModule, while `predict_step` just receives a batch from the caller.
 
@@ -96,6 +96,14 @@ OoD experiments require two distinct operations: (1) marking classes as out-of-d
 
 This separation means eval and train datasets share the same relabelling (same `mark_as_ood` call), with training getting an additional filter. The metadata (`num_classes`, `all_class_names`) is identical between them, which is essential for consistent metrics.
 
+## Model vs Candidate
+
+A **model** is an architecture + training recipe + inference logic (the `Model` protocol). A **candidate** is a model trained on a specific dataset — the unit of comparison in an experiment. The framework pairs them via `train()` / `load()` / `train_or_load()` functions that return a `Candidate` object.
+
+This separation means the model class has no constructor arguments — the class *is* the configuration. Different hyperparameters = different model class. This makes models self-describing and enables the framework to derive checkpoint paths from `model.name` + `dataset.name` without any external configuration.
+
+See `model_candidate_design.md` for the full design.
+
 ## Train/Test Split Is a Dataset Concern
 
-Train and test are separate `SegmentationDataset` objects: `CityscapesDataset(root, split="train")` vs `CityscapesDataset(root, split="test")`. The DataLoader has no opinion about what the data is — it just batches whatever dataset you hand it. The experiment script wires datasets to candidates and evaluation explicitly. This makes cross-dataset experiments (train on Cityscapes, evaluate on BDD100K) natural — just two different dataset objects passed to different functions.
+Train and test are separate `SegmentationDataset` objects: `CityscapesDataset(root, split="train")` vs `CityscapesDataset(root, split="test")`. The DataLoader has no opinion about what the data is — it just batches whatever dataset you hand it. The experiment script wires datasets to models and evaluation explicitly. This makes cross-dataset experiments (train on Cityscapes, evaluate on BDD100K) natural — just two different dataset objects passed to different functions.
