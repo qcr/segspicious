@@ -1,4 +1,4 @@
-"""Candidate interface for segmentation UQ benchmarking."""
+"""Model interface for segmentation UQ benchmarking."""
 
 from __future__ import annotations
 
@@ -12,25 +12,24 @@ from segspicious.outputs import SegmentationOutput
 
 
 @runtime_checkable
-class Candidate(Protocol):
-    """A complete pipeline from input image to segmentation output.
+class Model(Protocol):
+    """A segmentation model: architecture + training recipe + inference logic.
 
-    The candidate is the unit of comparison in an experiment. It owns its
-    full training procedure (architecture, optimiser, augmentation, etc.)
-    and its inference procedure (how raw model output becomes a
-    ``SegmentationOutput`` or ``UncertaintyOutput``).
+    The class *is* the configuration — no constructor arguments.
+    Different hyperparameters = different class (use inheritance to share
+    machinery).  Dataset-dependent values like ``num_classes`` are
+    discovered from the dataset at train time.
 
     Lifecycle: **construct → train → save → load → predict**.
 
-    The experiment script constructs the candidate with its configuration,
-    calls ``train()`` with a dataset, and later calls ``predict()`` with
-    batched image tensors. ``save``/``load`` enable training on one machine
-    and evaluating on another.
+    The experiment script constructs the model (no arguments), hands it
+    to a framework function like ``train_or_load``, and later calls
+    ``predict()`` with batched image tensors.
     """
 
     @property
     def name(self) -> str:
-        """Identifier for results tables and saved state."""
+        """Identifier for checkpoint paths and results tables."""
         ...
 
     def train(
@@ -40,19 +39,18 @@ class Candidate(Protocol):
     ) -> None:
         """Train on the given dataset.
 
-        The candidate owns its full training procedure: architecture,
+        The model owns its full training procedure: architecture,
         optimiser, schedule, augmentation, epochs, DataLoader construction,
         everything. The experiment only provides data.
 
         Args:
             dataset: Training data.
             validation_data: Optional held-out split used for monitoring
-                training progress (e.g. early stopping, logging validation
-                loss/metrics). Must **not** be used for model selection
-                that biases the final evaluation. ``None`` means no
-                validation monitoring.
+                training progress (e.g. early stopping, best-checkpoint
+                selection). The model should restore its best weights
+                before returning. ``None`` means no validation monitoring.
 
-        A pre-trained candidate may implement this as a no-op.
+        A pre-trained model may implement this as a no-op.
         """
         ...
 
@@ -72,17 +70,16 @@ class Candidate(Protocol):
     def save(self, path: Path) -> None:
         """Serialise learned state to disk.
 
-        Only learned state — the candidate's configuration (architecture,
-        hyperparameters) lives in the experiment code that constructs the
-        candidate object.
+        Only learned state — the model's configuration (architecture,
+        hyperparameters) lives in the class definition itself.
         """
         ...
 
     def load(self, path: Path) -> None:
         """Load learned state from disk.
 
-        The candidate object must already exist (constructed with matching
-        configuration). This mirrors PyTorch's
+        The model object must already exist (constructed with matching
+        class). This mirrors PyTorch's
         ``model.load_state_dict(torch.load(path))`` pattern.
         """
         ...

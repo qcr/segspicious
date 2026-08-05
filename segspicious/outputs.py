@@ -9,7 +9,7 @@ from torch import Tensor
 
 @dataclass
 class SegmentationOutput:
-    """Output from a segmentation candidate.
+    """Output from a segmentation model.
 
     Attributes:
         prediction: (B, H, W) long tensor with argmax class index per pixel.
@@ -21,10 +21,10 @@ class SegmentationOutput:
 
 @dataclass
 class UncertaintyOutput(SegmentationOutput):
-    """Output from an uncertainty-aware segmentation candidate.
+    """Output from an uncertainty-aware segmentation model.
 
     Extends SegmentationOutput with optional uncertainty fields.
-    A candidate populates only the fields it can meaningfully provide.
+    A model populates only the fields it can meaningfully provide.
 
     Attributes:
         class_probs: (B, C, H, W) float tensor. Probability distribution over

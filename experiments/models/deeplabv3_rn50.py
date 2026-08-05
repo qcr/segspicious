@@ -1,4 +1,4 @@
-"""DeepLabV3 ResNet-50 candidate with softmax UQ."""
+"""DeepLabV3 ResNet-50 model with softmax UQ."""
 
 from __future__ import annotations
 
@@ -106,11 +106,11 @@ class _TrainAugDataset(Dataset):
         return image, labels
 
 
-# -- Candidate -------------------------------------------------------------
+# -- Model -----------------------------------------------------------------
 
 
-class DeepLabV3RN50Candidate:
-    """DeepLabV3 ResNet-50 segmentation candidate with softmax UQ.
+class DeepLabV3RN50:
+    """DeepLabV3 ResNet-50 segmentation model with softmax UQ.
 
     Uses a COCO-pretrained DeepLabV3 ResNet-50 backbone from torchvision,
     fine-tuned on the provided dataset.  Produces softmax class

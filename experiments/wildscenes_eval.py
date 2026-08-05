@@ -5,7 +5,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
-from experiments.candidates import DeepLabV3RN50Candidate
+from experiments.models import DeepLabV3RN50
 from experiments.datasets.wildscenes2d import Wildscenes2dDataset
 from segspicious.datasets import Split, subset
 from segspicious.metrics import IoU, PixelAccuracy
@@ -20,7 +20,7 @@ def main() -> None:
     val_data = Wildscenes2dDataset(WILDSCENES_ROOT, split=Split.VAL)
     test_data = Wildscenes2dDataset(WILDSCENES_ROOT, split=Split.TEST)
 
-    candidate = DeepLabV3RN50Candidate(
+    model = DeepLabV3RN50(
         num_classes=train_data.num_classes,
         epochs=5,
         batch_size=4,
@@ -29,8 +29,8 @@ def main() -> None:
         num_workers=4,
     )
 
-    print(f"Training {candidate.name} …")
-    candidate.train(train_data, validation_data=val_data)
+    print(f"Training {model.name} …")
+    model.train(train_data, validation_data=val_data)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -44,7 +44,7 @@ def main() -> None:
     print(f"Evaluating on val ({len(test_data)} samples) …")
     for images, labels in loader:
         images = images.to(device)
-        output = candidate.predict(images)
+        output = model.predict(images)
         output.prediction = output.prediction.cpu()
         iou.update(output, labels)
         acc.update(output, labels)
