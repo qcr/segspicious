@@ -33,12 +33,24 @@ class Candidate(Protocol):
         """Identifier for results tables and saved state."""
         ...
 
-    def train(self, dataset: SegmentationDataset) -> None:
+    def train(
+        self,
+        dataset: SegmentationDataset,
+        validation_data: SegmentationDataset | None = None,
+    ) -> None:
         """Train on the given dataset.
 
         The candidate owns its full training procedure: architecture,
         optimiser, schedule, augmentation, epochs, DataLoader construction,
         everything. The experiment only provides data.
+
+        Args:
+            dataset: Training data.
+            validation_data: Optional held-out split used for monitoring
+                training progress (e.g. early stopping, logging validation
+                loss/metrics). Must **not** be used for model selection
+                that biases the final evaluation. ``None`` means no
+                validation monitoring.
 
         A pre-trained candidate may implement this as a no-op.
         """

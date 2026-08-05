@@ -164,8 +164,18 @@ class DeepLabV3RN50Candidate:
 
     # -- Training ----------------------------------------------------------
 
-    def train(self, dataset: SegmentationDataset) -> None:
-        """Fine-tune on the given dataset."""
+    def train(
+        self,
+        dataset: SegmentationDataset,
+        validation_data: SegmentationDataset | None = None,
+    ) -> None:
+        """Fine-tune on the given dataset.
+
+        Args:
+            dataset: Training data.
+            validation_data: Optional validation split for monitoring
+                training progress (e.g. logging val loss each epoch).
+        """
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         model = self._model.to(device)
@@ -211,7 +221,19 @@ class DeepLabV3RN50Candidate:
 
         criterion = nn.CrossEntropyLoss(ignore_index=dataset.ignore_index)
 
+        # Optional validation loader
+        val_loader: DataLoader | None = None
+        if validation_data is not None:
+            val_loader = DataLoader(
+                validation_data,
+                batch_size=self._batch_size,
+                shuffle=False,
+                num_workers=self._num_workers,
+                pin_memory=device.type == "cuda",
+            )
+
         for epoch in range(self._epochs):
+            model.train()
             pbar = tqdm(loader, desc=f"Epoch {epoch + 1}/{self._epochs}")
             for images, labels in pbar:
                 images = images.to(device)
@@ -228,6 +250,21 @@ class DeepLabV3RN50Candidate:
                 scheduler.step()
 
                 pbar.set_postfix(loss=f"{total_loss.item():.4f}")
+
+            # -- Validation loss ------------------------------------------
+            if val_loader is not None:
+                model.eval()
+                val_loss_sum = 0.0
+                val_count = 0
+                with torch.no_grad():
+                    for images, labels in val_loader:
+                        images = _normalise(images.to(device))
+                        labels = labels.to(device)
+                        out = model(images)
+                        val_loss_sum += criterion(out["out"], labels).item() * labels.size(0)
+                        val_count += labels.size(0)
+                val_loss = val_loss_sum / max(val_count, 1)
+                print(f"  val_loss={val_loss:.4f}")
 
         self._model = model.cpu()
 

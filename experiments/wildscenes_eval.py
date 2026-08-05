@@ -18,6 +18,7 @@ def main() -> None:
     train_full = Wildscenes2dDataset(WILDSCENES_ROOT, split=Split.TRAIN)
     train_data = subset(train_full, n=100, seed=42)
     val_data = Wildscenes2dDataset(WILDSCENES_ROOT, split=Split.VAL)
+    test_data = Wildscenes2dDataset(WILDSCENES_ROOT, split=Split.TEST)
 
     candidate = DeepLabV3RN50Candidate(
         num_classes=train_data.num_classes,
@@ -29,18 +30,18 @@ def main() -> None:
     )
 
     print(f"Training {candidate.name} …")
-    candidate.train(train_data)
+    candidate.train(train_data, validation_data=val_data)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    iou = IoU(num_classes=val_data.num_classes, ignore_index=val_data.ignore_index)
+    iou = IoU(num_classes=test_data.num_classes, ignore_index=test_data.ignore_index)
     acc = PixelAccuracy(
-        num_classes=val_data.num_classes, ignore_index=val_data.ignore_index
+        num_classes=test_data.num_classes, ignore_index=test_data.ignore_index
     )
 
-    loader = DataLoader(val_data, batch_size=4, num_workers=4, pin_memory=True)
+    loader = DataLoader(test_data, batch_size=4, num_workers=4, pin_memory=True)
 
-    print(f"Evaluating on val ({len(val_data)} samples) …")
+    print(f"Evaluating on val ({len(test_data)} samples) …")
     for images, labels in loader:
         images = images.to(device)
         output = candidate.predict(images)
@@ -53,7 +54,7 @@ def main() -> None:
 
     print()
     print("Per-class IoU:")
-    for name, val in zip(val_data.class_names, iou_result.per_class_iou):
+    for name, val in zip(test_data.class_names, iou_result.per_class_iou):
         print(f"  {name:20s} {val:.4f}")
     print()
     print(f"  {'mIoU':20s} {iou_result.mean_iou:.4f}")
