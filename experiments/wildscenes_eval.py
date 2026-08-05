@@ -5,8 +5,8 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
-from experiments.models import DeepLabV3RN50
 from experiments.datasets.wildscenes2d import Wildscenes2dDataset
+from experiments.models import DeepLabV3RN50
 from segspicious import train_or_load
 from segspicious.datasets import Split, subset
 from segspicious.metrics import IoU, PixelAccuracy
