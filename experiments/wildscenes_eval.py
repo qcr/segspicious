@@ -20,14 +20,7 @@ def main() -> None:
     val_data = Wildscenes2dDataset(WILDSCENES_ROOT, split=Split.VAL)
     test_data = Wildscenes2dDataset(WILDSCENES_ROOT, split=Split.TEST)
 
-    model = DeepLabV3RN50(
-        num_classes=train_data.num_classes,
-        epochs=5,
-        batch_size=4,
-        lr=0.01,
-        crop_size=512,
-        num_workers=4,
-    )
+    model = DeepLabV3RN50()
 
     print(f"Training {model.name} …")
     model.train(train_data, validation_data=val_data)

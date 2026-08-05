@@ -116,32 +116,21 @@ class DeepLabV3RN50:
     fine-tuned on the provided dataset.  Produces softmax class
     probabilities and predictive entropy as uncertainty.
 
-    Args:
-        num_classes: Number of output classes.
-        epochs: Training epochs.
-        batch_size: Training batch size.
-        lr: Base learning rate for backbone.  Classifier heads use 10x.
-        crop_size: Random crop size during training.
-        num_workers: DataLoader workers for training.
+    The class *is* the configuration — no constructor arguments.
+    Dataset-dependent values like ``num_classes`` are discovered from
+    the dataset at train time.  Different hyperparameters = different
+    class (use inheritance to override class attributes).
     """
 
-    def __init__(
-        self,
-        num_classes: int,
-        epochs: int = 50,
-        batch_size: int = 4,
-        lr: float = 0.01,
-        crop_size: int = 512,
-        num_workers: int = 4,
-    ) -> None:
-        self._num_classes = num_classes
-        self._epochs = epochs
-        self._batch_size = batch_size
-        self._lr = lr
-        self._crop_size = crop_size
-        self._num_workers = num_workers
+    epochs: int = 50
+    batch_size: int = 4
+    lr: float = 0.01
+    crop_size: int = 512
+    num_workers: int = 4
 
-        self._model = self._build_model(num_classes)
+    def __init__(self) -> None:
+        self._model: nn.Module | None = None
+        self._num_classes: int | None = None
 
     @staticmethod
     def _build_model(num_classes: int) -> nn.Module:
@@ -171,11 +160,17 @@ class DeepLabV3RN50:
     ) -> None:
         """Fine-tune on the given dataset.
 
+        Discovers ``num_classes`` from the dataset, builds the model,
+        trains for ``self.epochs`` epochs, and stores the best weights.
+
         Args:
             dataset: Training data.
             validation_data: Optional validation split for monitoring
                 training progress (e.g. logging val loss each epoch).
         """
+        self._num_classes = dataset.num_classes
+        self._model = self._build_model(self._num_classes)
+
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         model = self._model.to(device)
@@ -183,14 +178,14 @@ class DeepLabV3RN50:
 
         train_ds = _TrainAugDataset(
             dataset,
-            crop_size=self._crop_size,
+            crop_size=self.crop_size,
             ignore_index=dataset.ignore_index,
         )
         loader = DataLoader(
             train_ds,
-            batch_size=self._batch_size,
+            batch_size=self.batch_size,
             shuffle=True,
-            num_workers=self._num_workers,
+            num_workers=self.num_workers,
             pin_memory=device.type == "cuda",
             drop_last=True,
         )
@@ -206,14 +201,14 @@ class DeepLabV3RN50:
 
         optimiser = SGD(
             [
-                {"params": backbone_params, "lr": self._lr},
-                {"params": head_params, "lr": self._lr * 10},
+                {"params": backbone_params, "lr": self.lr},
+                {"params": head_params, "lr": self.lr * 10},
             ],
             momentum=0.9,
             weight_decay=1e-4,
         )
 
-        max_iters = self._epochs * len(loader)
+        max_iters = self.epochs * len(loader)
         scheduler = LambdaLR(
             optimiser,
             lr_lambda=lambda it: (1 - it / max_iters) ** 0.9,
@@ -226,15 +221,15 @@ class DeepLabV3RN50:
         if validation_data is not None:
             val_loader = DataLoader(
                 validation_data,
-                batch_size=self._batch_size,
+                batch_size=self.batch_size,
                 shuffle=False,
-                num_workers=self._num_workers,
+                num_workers=self.num_workers,
                 pin_memory=device.type == "cuda",
             )
 
-        for epoch in range(self._epochs):
+        for epoch in range(self.epochs):
             model.train()
-            pbar = tqdm(loader, desc=f"Epoch {epoch + 1}/{self._epochs}")
+            pbar = tqdm(loader, desc=f"Epoch {epoch + 1}/{self.epochs}")
             for images, labels in pbar:
                 images = images.to(device)
                 labels = labels.to(device)
@@ -272,6 +267,9 @@ class DeepLabV3RN50:
 
     def predict(self, images: Tensor) -> UncertaintyOutput:
         """Single forward pass → softmax probabilities + entropy."""
+        assert self._model is not None, (
+            "Model not initialised. Call train() or load() first."
+        )
         self._model.to(images.device)
         self._model.eval()
 
@@ -294,11 +292,19 @@ class DeepLabV3RN50:
     # -- Serialisation -----------------------------------------------------
 
     def save(self, path: Path) -> None:
-        """Save model weights to disk."""
+        """Save model weights and num_classes to disk."""
+        assert self._model is not None, (
+            "Model not initialised. Call train() before save()."
+        )
         path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(self._model.state_dict(), path)
+        torch.save(
+            {"state_dict": self._model.state_dict(), "num_classes": self._num_classes},
+            path,
+        )
 
     def load(self, path: Path) -> None:
-        """Load model weights from disk."""
-        state = torch.load(path, map_location="cpu", weights_only=True)
-        self._model.load_state_dict(state)
+        """Load model weights and num_classes from disk."""
+        checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+        self._num_classes = checkpoint["num_classes"]
+        self._model = self._build_model(self._num_classes)
+        self._model.load_state_dict(checkpoint["state_dict"])
