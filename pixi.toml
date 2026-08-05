@@ -15,6 +15,7 @@ tqdm = "*"
 matplotlib = "*"
 hatchling = "*"
 torchmetrics = ">=1.9.0,<2"
+tensorboard = ">=2.20.0,<3"
 
 [pypi-dependencies]
 segspicious = { path = ".", editable = true }
@@ -31,3 +32,4 @@ default = { features = ["dev"], solve-group = "default" }
 
 [tasks]
 test = "pytest segspicious/tests/ experiments/ -v"
+tensorboard = "tensorboard --logdir ./runs"

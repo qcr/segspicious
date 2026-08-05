@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import random
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from torch import Tensor, nn
 from torch.optim import SGD
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader, Dataset
+from torch.utils.tensorboard import SummaryWriter
 from torchvision.models.segmentation import (
     DeepLabV3_ResNet50_Weights,
     deeplabv3_resnet50,
@@ -127,6 +129,7 @@ class DeepLabV3RN50:
     lr: float = 0.01
     crop_size: int = 512
     num_workers: int = 4
+    log_dir: str = "runs"
 
     def __init__(self) -> None:
         self._model: nn.Module | None = None
@@ -163,10 +166,17 @@ class DeepLabV3RN50:
         Discovers ``num_classes`` from the dataset, builds the model,
         trains for ``self.epochs`` epochs, and stores the best weights.
 
+        When *validation_data* is provided the model tracks validation
+        loss each epoch and restores the best-performing weights before
+        returning (best-validation checkpointing).
+
+        Training and validation metrics are logged to TensorBoard under
+        ``{self.log_dir}/{self.name}``.
+
         Args:
             dataset: Training data.
             validation_data: Optional validation split for monitoring
-                training progress (e.g. logging val loss each epoch).
+                training progress and best-checkpoint selection.
         """
         self._num_classes = dataset.num_classes
         self._model = self._build_model(self._num_classes)
@@ -227,8 +237,18 @@ class DeepLabV3RN50:
                 pin_memory=device.type == "cuda",
             )
 
+        # -- TensorBoard writer -------------------------------------------
+        writer = SummaryWriter(log_dir=str(Path(self.log_dir) / f"{self.name}-{dataset.name}"))
+
+        # -- Best-validation checkpoint state -----------------------------
+        best_val_loss = float("inf")
+        best_state_dict: dict | None = None
+
+        global_step = 0
         for epoch in range(self.epochs):
             model.train()
+            epoch_loss_sum = 0.0
+            epoch_steps = 0
             pbar = tqdm(loader, desc=f"Epoch {epoch + 1}/{self.epochs}")
             for images, labels in pbar:
                 images = images.to(device)
@@ -244,7 +264,20 @@ class DeepLabV3RN50:
                 optimiser.step()
                 scheduler.step()
 
-                pbar.set_postfix(loss=f"{total_loss.item():.4f}")
+                step_loss = total_loss.item()
+                epoch_loss_sum += step_loss
+                epoch_steps += 1
+                global_step += 1
+
+                writer.add_scalar("train/loss_step", step_loss, global_step)
+                pbar.set_postfix(loss=f"{step_loss:.4f}")
+
+            # Log epoch-level training loss
+            epoch_train_loss = epoch_loss_sum / max(epoch_steps, 1)
+            writer.add_scalar("train/loss_epoch", epoch_train_loss, epoch + 1)
+
+            # Log learning rate
+            writer.add_scalar("train/lr", scheduler.get_last_lr()[0], epoch + 1)
 
             # -- Validation loss ------------------------------------------
             if val_loader is not None:
@@ -259,7 +292,20 @@ class DeepLabV3RN50:
                         val_loss_sum += criterion(out["out"], labels).item() * labels.size(0)
                         val_count += labels.size(0)
                 val_loss = val_loss_sum / max(val_count, 1)
+                writer.add_scalar("val/loss", val_loss, epoch + 1)
                 print(f"  val_loss={val_loss:.4f}")
+
+                # Track best validation checkpoint
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    best_state_dict = copy.deepcopy(model.state_dict())
+
+        writer.close()
+
+        # -- Restore best weights -----------------------------------------
+        if best_state_dict is not None:
+            model.load_state_dict(best_state_dict)
+            print(f"  Restored best val checkpoint (val_loss={best_val_loss:.4f})")
 
         self._model = model.cpu()
 

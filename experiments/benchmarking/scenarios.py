@@ -18,7 +18,7 @@ WILDSCENES_ROOT = Path(
         "WILDSCENES_ROOT",
         "~/datasets/WildScenes/WildScenes2d",
     )
-)
+).expanduser()
 
 
 # ---------------------------------------------------------------------------
