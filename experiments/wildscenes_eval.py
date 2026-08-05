@@ -7,11 +7,11 @@ from torch.utils.data import DataLoader
 
 from experiments.models import DeepLabV3RN50
 from experiments.datasets.wildscenes2d import Wildscenes2dDataset
+from segspicious import train_or_load
 from segspicious.datasets import Split, subset
 from segspicious.metrics import IoU, PixelAccuracy
 
 WILDSCENES_ROOT = Path("/home/alistair/datasets/WildScenes/WildScenes2d")
-CHECKPOINT_DIR = Path("checkpoints")
 
 
 def main() -> None:
@@ -20,10 +20,10 @@ def main() -> None:
     val_data = Wildscenes2dDataset(WILDSCENES_ROOT, split=Split.VAL)
     test_data = Wildscenes2dDataset(WILDSCENES_ROOT, split=Split.TEST)
 
-    model = DeepLabV3RN50()
+    candidate = train_or_load(DeepLabV3RN50(), train_data, validation_data=val_data)
+    model = candidate.model
 
-    print(f"Training {model.name} …")
-    model.train(train_data, validation_data=val_data)
+    print(f"Model {model.name} ready.")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
