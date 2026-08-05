@@ -194,13 +194,14 @@ class TestGetClassesPresent:
 class TestFilterByLabels:
     def test_always_true(self):
         ds = SyntheticDataset(num_samples=5)
-        filtered = filter_by_labels(ds, predicate=lambda lbl: True)
+        filtered = filter_by_labels(ds, predicate=lambda lbl: True, label="all")
         assert len(filtered) == 5
 
     def test_always_false(self):
         filtered = filter_by_labels(
             SyntheticDataset(num_samples=5),
             predicate=lambda lbl: False,
+            label="none",
         )
         assert len(filtered) == 0
 
@@ -213,19 +214,19 @@ class TestFilterByLabels:
         ds._labels[4] = torch.tensor([[0, 1], [1, 0]])
         # Keep only samples containing class 2
         filtered = filter_by_labels(
-            ds, predicate=lambda lbl: (lbl == 2).any()
+            ds, predicate=lambda lbl: (lbl == 2).any(), label="has_class2"
         )
         assert len(filtered) == 2  # samples 1 and 3
 
     def test_metadata_propagated(self):
         ds = SyntheticDataset(num_classes=6)
-        filtered = filter_by_labels(ds, predicate=lambda lbl: True)
+        filtered = filter_by_labels(ds, predicate=lambda lbl: True, label="all")
         assert filtered.num_classes == ds.num_classes
         assert filtered.class_names == ds.class_names
         assert filtered.ignore_index == ds.ignore_index
 
     def test_returns_segmentation_dataset(self):
-        filtered = filter_by_labels(SyntheticDataset(), predicate=lambda lbl: True)
+        filtered = filter_by_labels(SyntheticDataset(), predicate=lambda lbl: True, label="all")
         assert isinstance(filtered, SegmentationDataset)
 
 
@@ -235,30 +236,31 @@ class TestFilterByLabels:
 class TestFilterSamples:
     def test_always_true(self):
         ds = SyntheticDataset(num_samples=5)
-        filtered = filter_samples(ds, predicate=lambda img, lbl: True)
+        filtered = filter_samples(ds, predicate=lambda img, lbl: True, label="all")
         assert len(filtered) == 5
 
     def test_always_false(self):
         filtered = filter_samples(
             SyntheticDataset(num_samples=5),
             predicate=lambda img, lbl: False,
+            label="none",
         )
         assert len(filtered) == 0
 
     def test_partial_filter(self):
         ds = SyntheticDataset(num_samples=20, seed=0, height=32, width=32)
-        filtered = filter_samples(ds, predicate=lambda img, lbl: img.mean() > 0.5)
+        filtered = filter_samples(ds, predicate=lambda img, lbl: img.mean() > 0.5, label="bright")
         assert 0 < len(filtered) < 20
 
     def test_metadata_propagated(self):
         ds = SyntheticDataset(num_classes=6)
-        filtered = filter_samples(ds, predicate=lambda img, lbl: True)
+        filtered = filter_samples(ds, predicate=lambda img, lbl: True, label="all")
         assert filtered.num_classes == ds.num_classes
         assert filtered.class_names == ds.class_names
         assert filtered.ignore_index == ds.ignore_index
 
     def test_returns_segmentation_dataset(self):
-        filtered = filter_samples(SyntheticDataset(), predicate=lambda img, lbl: True)
+        filtered = filter_samples(SyntheticDataset(), predicate=lambda img, lbl: True, label="all")
         assert isinstance(filtered, SegmentationDataset)
 
 

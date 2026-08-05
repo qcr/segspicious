@@ -24,6 +24,7 @@ class _Subset(SegmentationDataset):
         self,
         dataset: SegmentationDataset,
         *,
+        name: str,
         indices: Sequence[int] | None = None,
         n: int | None = None,
         seed: int = 0,
@@ -33,6 +34,7 @@ class _Subset(SegmentationDataset):
         if indices is None and n is None:
             raise ValueError("Provide either 'indices' or 'n'.")
 
+        self._name = name
         self._dataset = dataset
         if indices is not None:
             self._indices = list(indices)
@@ -44,6 +46,10 @@ class _Subset(SegmentationDataset):
                 )
             rng = random.Random(seed)
             self._indices = rng.sample(range(len(dataset)), n)
+
+    @property
+    def name(self) -> str:
+        return self._name
 
     @property
     def num_classes(self) -> int:
@@ -77,7 +83,7 @@ class _Subset(SegmentationDataset):
 class _ConcatDataset(SegmentationDataset):
     """Concatenation of multiple datasets. Validates and propagates metadata."""
 
-    def __init__(self, datasets: Sequence[SegmentationDataset]) -> None:
+    def __init__(self, datasets: Sequence[SegmentationDataset], *, name: str) -> None:
         if not datasets:
             raise ValueError("Need at least one dataset.")
 
@@ -98,6 +104,7 @@ class _ConcatDataset(SegmentationDataset):
                     f"dataset {i} has {ds.ignore_index}."
                 )
 
+        self._name = name
         self._first = first
         self._datasets = list(datasets)
         self._concat = _TorchConcatDataset(datasets)
@@ -108,6 +115,10 @@ class _ConcatDataset(SegmentationDataset):
         ds_idx = bisect.bisect_right(sizes, index)
         local = index if ds_idx == 0 else index - sizes[ds_idx - 1]
         return self._datasets[ds_idx], local
+
+    @property
+    def name(self) -> str:
+        return self._name
 
     @property
     def num_classes(self) -> int:
@@ -155,12 +166,19 @@ class _RemappedDataset(SegmentationDataset):
         num_classes: int,
         all_class_names: tuple[str, ...],
         ignore_index: int,
+        *,
+        name: str,
     ) -> None:
+        self._name = name
         self._dataset = dataset
         self._remap = remap
         self._num_classes = num_classes
         self._all_class_names = all_class_names
         self._ignore_index = ignore_index
+
+    @property
+    def name(self) -> str:
+        return self._name
 
     @property
     def num_classes(self) -> int:
@@ -210,7 +228,13 @@ def subset(
     Provide either ``indices`` (explicit) or ``n`` + ``seed`` (random
     subsample of fixed size).
     """
-    return _Subset(dataset, indices=indices, n=n, seed=seed)
+    if indices is not None:
+        joined = "+".join(str(i) for i in indices)
+        suffix = f"-subset[indices={joined}]"
+    else:
+        suffix = f"-subset[n={n},seed={seed}]"
+    name = f"{dataset.name}{suffix}"
+    return _Subset(dataset, name=name, indices=indices, n=n, seed=seed)
 
 
 def concat_datasets(
@@ -221,16 +245,25 @@ def concat_datasets(
     All datasets must share the same ``num_classes``, ``class_names``,
     and ``ignore_index``.
     """
-    return _ConcatDataset(datasets)
+    name = "+".join(ds.name for ds in datasets)
+    return _ConcatDataset(datasets, name=name)
 
 
 def filter_samples(
     dataset: SegmentationDataset,
     predicate: Callable[[Tensor, Tensor], bool],
+    *,
+    label: str,
 ) -> SegmentationDataset:
     """Keep only samples where ``predicate(image, labels)`` is True.
 
     Scans the full dataset at construction time to compute kept indices.
+
+    Args:
+        dataset: Source dataset.
+        predicate: A function ``(image, labels) -> bool``.
+        label: Human-readable description of what the predicate does.
+            Used in the dataset name suffix.
 
     .. note::
 
@@ -243,25 +276,35 @@ def filter_samples(
        nearly free on datasets that cache class metadata.
     """
     indices = [i for i in range(len(dataset)) if predicate(*dataset[i])]
-    return _Subset(dataset, indices=indices)
+    name = f"{dataset.name}-filter[{label}]"
+    return _Subset(dataset, name=name, indices=indices)
 
 
 def filter_by_labels(
     dataset: SegmentationDataset,
     predicate: Callable[[Tensor], bool],
+    *,
+    label: str,
 ) -> SegmentationDataset:
     """Keep only samples where ``predicate(labels)`` is True.
 
     Like :func:`filter_samples` but the predicate receives only the
     label tensor.  Uses :meth:`~SegmentationDataset.get_labels` so
     disk-backed datasets can skip image decoding during the scan.
+
+    Args:
+        dataset: Source dataset.
+        predicate: A function ``(labels) -> bool``.
+        label: Human-readable description of what the predicate does.
+            Used in the dataset name suffix.
     """
     indices = [
         i
         for i in range(len(dataset))
         if predicate(dataset.get_labels(i))
     ]
-    return _Subset(dataset, indices=indices)
+    name = f"{dataset.name}-filter[{label}]"
+    return _Subset(dataset, name=name, indices=indices)
 
 
 def select_classes(
@@ -307,7 +350,14 @@ def select_classes(
         for i in range(len(dataset))
         if class_indices & dataset.get_classes_present(i)
     ]
-    return _Subset(dataset, indices=indices)
+    # Build name suffix with sorted class names
+    if isinstance(classes[0], str):
+        sorted_names = sorted(str(c) for c in classes)
+    else:
+        sorted_names = sorted(dataset.class_names[int(c)] for c in classes)
+    suffix = "-select[" + "+".join(sorted_names) + "]"
+    name = f"{dataset.name}{suffix}"
+    return _Subset(dataset, name=name, indices=indices)
 
 
 def mark_as_ood(
@@ -379,8 +429,16 @@ def mark_as_ood(
         remap[old_idx] = ood_counter
         ood_counter += 1
 
+    # Build name suffix with sorted class names
+    if isinstance(classes[0], str):
+        sorted_names = sorted(str(c) for c in classes)
+    else:
+        sorted_names = sorted(dataset.class_names[int(c)] for c in classes)
+    suffix = "-mark_ood[" + "+".join(sorted_names) + "]"
+    name = f"{dataset.name}{suffix}"
+
     return _RemappedDataset(
-        dataset, remap, n, all_names, dataset.ignore_index
+        dataset, remap, n, all_names, dataset.ignore_index, name=name
     )
 
 
@@ -428,7 +486,14 @@ def hold_out_classes(
         for i in range(len(dataset))
         if not (class_indices & dataset.get_classes_present(i))
     ]
-    return _Subset(dataset, indices=indices)
+    # Build name suffix with sorted class names
+    if isinstance(classes[0], str):
+        sorted_names = sorted(str(c) for c in classes)
+    else:
+        sorted_names = sorted(dataset.class_names[int(c)] for c in classes)
+    suffix = "-hold_out[" + "+".join(sorted_names) + "]"
+    name = f"{dataset.name}{suffix}"
+    return _Subset(dataset, name=name, indices=indices)
 
 
 def hold_out_ood(
@@ -455,7 +520,8 @@ def hold_out_ood(
             for c in dataset.get_classes_present(i)
         )
     ]
-    return _Subset(dataset, indices=indices)
+    name = f"{dataset.name}-hold_out_ood"
+    return _Subset(dataset, name=name, indices=indices)
 
 
 def remap_classes(
@@ -529,7 +595,14 @@ def remap_classes(
 
     new_num_classes = n + len(unmapped_names)
     all_names = tuple(new_names) + tuple(unmapped_names) + dataset.ood_class_names
-    return _RemappedDataset(dataset, remap, new_num_classes, all_names, ignore)
+
+    # Build name suffix with mapping entries sorted by key
+    sorted_entries = sorted(mapping.items(), key=lambda kv: kv[0])
+    parts = [f"{old}={new}" for old, new in sorted_entries]
+    suffix = "-remap[" + "+".join(parts) + "]"
+    name = f"{dataset.name}{suffix}"
+
+    return _RemappedDataset(dataset, remap, new_num_classes, all_names, ignore, name=name)
 
 
 __all__ = [

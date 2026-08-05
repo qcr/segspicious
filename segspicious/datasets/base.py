@@ -33,6 +33,16 @@ class SegmentationDataset(Dataset):
 
     @property
     @abstractmethod
+    def name(self) -> str:
+        """Human-readable identifier for this dataset.
+
+        Used for checkpoint path derivation.  Modifier functions append
+        suffixes so the name captures the full transformation chain.
+        """
+        ...
+
+    @property
+    @abstractmethod
     def num_classes(self) -> int:
         """Number of in-distribution classes."""
         ...

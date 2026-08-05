@@ -120,12 +120,20 @@ class Wildscenes2dDataset(SegmentationDataset):
                 f"sequence={sequence.value!r}."
             )
 
+        self._split = split
+        self._sequence = sequence
         self._sample_paths = sample_paths
         self._class_cache = ClassIndexCache(
             path=self._root / ".segspicious_cache" / "classes_present.json",
             index_to_key=[str(lbl_path) for _, lbl_path in sample_paths],
             get_labels=self.get_labels,
         )
+
+    @property
+    def name(self) -> str:
+        if self._sequence is Sequence.ALL:
+            return f"wildscenes2d_{self._split.value}"
+        return f"wildscenes2d_{self._sequence.name}_{self._split.value}"
 
     @property
     def num_classes(self) -> int:

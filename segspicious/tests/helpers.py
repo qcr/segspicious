@@ -32,6 +32,7 @@ class SyntheticDataset(SegmentationDataset):
         ignore_index: int = 255,
         class_names: tuple[str, ...] | None = None,
         seed: int = 0,
+        name: str = "synthetic",
     ) -> None:
         if (
             class_names is not None
@@ -50,12 +51,17 @@ class SyntheticDataset(SegmentationDataset):
             n = num_classes if num_classes is not None else 5
             self._class_names = tuple(f"class_{i}" for i in range(n))
 
+        self._name = name
         self._ignore_index = ignore_index
 
         n = len(self._class_names)
         gen = torch.Generator().manual_seed(seed)
         self._images = torch.rand(num_samples, 3, height, width, generator=gen)
         self._labels = torch.randint(0, n, (num_samples, height, width), generator=gen)
+
+    @property
+    def name(self) -> str:
+        return self._name
 
     @property
     def num_classes(self) -> int:
