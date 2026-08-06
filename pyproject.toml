@@ -7,7 +7,7 @@ name = "segspicious"
 version = "0.1.0"
 description = "Protocols, modifiers, and metrics for segmentation UQ benchmarking."
 requires-python = ">= 3.12"
-dependencies = []
+dependencies = ["huggingface_hub"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["segspicious"]

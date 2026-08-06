@@ -84,7 +84,7 @@ class TestCandidateName:
         dataset = SyntheticDataset(num_samples=20, name="wildscenes2d_train")
         sub = subset(dataset, n=10, seed=42)
         candidate = Candidate(model, sub)
-        assert candidate.name == "deeplabv3-rn50/wildscenes2d_train-subset[n=10,seed=42]"
+        assert candidate.name == "deeplabv3-rn50/wildscenes2d_train-subset(n=10,seed=42)"
 
     def test_name_with_different_model(self):
         model = _StubModel("my-custom-model")

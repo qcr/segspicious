@@ -10,12 +10,16 @@ Usage:
 
 from __future__ import annotations
 
+import segspicious
 from experiments.benchmarking.models import get_models
 from experiments.benchmarking.scenarios import get_scenarios
 from segspicious import train_or_load
 
+REPO_ID = "alistair-english/segspicious-checkpoints"
+
 
 def main() -> None:
+    segspicious.configure(repo_id=REPO_ID)
     scenarios = get_scenarios()
 
     print(f"=== Training candidates ({len(scenarios)} scenario(s)) ===\n")

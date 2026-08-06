@@ -337,20 +337,22 @@ class DeepLabV3RN50:
 
     # -- Serialisation -----------------------------------------------------
 
-    def save(self, path: Path) -> None:
-        """Save model weights and num_classes to disk."""
+    def save(self, directory: Path) -> None:
+        """Save model weights and num_classes to a directory."""
         assert self._model is not None, (
             "Model not initialised. Call train() before save()."
         )
-        path.parent.mkdir(parents=True, exist_ok=True)
+        directory.mkdir(parents=True, exist_ok=True)
         torch.save(
             {"state_dict": self._model.state_dict(), "num_classes": self._num_classes},
-            path,
+            directory / "checkpoint.pt",
         )
 
-    def load(self, path: Path) -> None:
-        """Load model weights and num_classes from disk."""
-        checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+    def load(self, directory: Path) -> None:
+        """Load model weights and num_classes from a directory."""
+        checkpoint = torch.load(
+            directory / "checkpoint.pt", map_location="cpu", weights_only=True,
+        )
         self._num_classes = checkpoint["num_classes"]
         self._model = self._build_model(self._num_classes)
         self._model.load_state_dict(checkpoint["state_dict"])

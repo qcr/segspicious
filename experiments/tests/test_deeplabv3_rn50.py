@@ -92,7 +92,7 @@ class TestPredictGuard:
     def test_save_before_train_raises(self):
         model = DeepLabV3RN50()
         with pytest.raises(AssertionError, match="not initialised"):
-            model.save(Path("/tmp/test_checkpoint.pt"))
+            model.save(Path("/tmp/test_checkpoint_dir"))
 
 
 # ── Save / load round-trip ───────────────────────────────────────────────
@@ -109,13 +109,13 @@ class TestSaveLoad:
         model._model = model._build_model(num_classes)
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "checkpoint.pt"
-            model.save(path)
+            directory = Path(tmpdir)
+            model.save(directory)
 
             # Load into a fresh instance
             model2 = DeepLabV3RN50()
             assert model2._model is None
-            model2.load(path)
+            model2.load(directory)
 
             assert model2._num_classes == num_classes
             assert model2._model is not None
@@ -131,11 +131,11 @@ class TestSaveLoad:
         out1 = model.predict(images)
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "checkpoint.pt"
-            model.save(path)
+            directory = Path(tmpdir)
+            model.save(directory)
 
             model2 = DeepLabV3RN50()
-            model2.load(path)
+            model2.load(directory)
             out2 = model2.predict(images)
 
         assert torch.allclose(out1.prediction, out2.prediction)
@@ -151,10 +151,12 @@ class TestSaveLoad:
         model._model = model._build_model(5)
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "checkpoint.pt"
-            model.save(path)
+            directory = Path(tmpdir)
+            model.save(directory)
 
-            checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+            checkpoint = torch.load(
+                directory / "checkpoint.pt", map_location="cpu", weights_only=True,
+            )
             assert "state_dict" in checkpoint
             assert "num_classes" in checkpoint
             assert checkpoint["num_classes"] == 5
@@ -219,11 +221,11 @@ class TestTrainDiscoversNumClasses:
         out_before = model.predict(images)
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "checkpoint.pt"
-            model.save(path)
+            directory = Path(tmpdir)
+            model.save(directory)
 
             model2 = QuickDeepLab()
-            model2.load(path)
+            model2.load(directory)
             out_after = model2.predict(images)
 
         assert torch.allclose(out_before.prediction, out_after.prediction)

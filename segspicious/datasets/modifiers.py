@@ -230,9 +230,9 @@ def subset(
     """
     if indices is not None:
         joined = "+".join(str(i) for i in indices)
-        suffix = f"-subset[indices={joined}]"
+        suffix = f"-subset(indices={joined})"
     else:
-        suffix = f"-subset[n={n},seed={seed}]"
+        suffix = f"-subset(n={n},seed={seed})"
     name = f"{dataset.name}{suffix}"
     return _Subset(dataset, name=name, indices=indices, n=n, seed=seed)
 
@@ -276,7 +276,7 @@ def filter_samples(
        nearly free on datasets that cache class metadata.
     """
     indices = [i for i in range(len(dataset)) if predicate(*dataset[i])]
-    name = f"{dataset.name}-filter[{label}]"
+    name = f"{dataset.name}-filter({label})"
     return _Subset(dataset, name=name, indices=indices)
 
 
@@ -303,7 +303,7 @@ def filter_by_labels(
         for i in range(len(dataset))
         if predicate(dataset.get_labels(i))
     ]
-    name = f"{dataset.name}-filter[{label}]"
+    name = f"{dataset.name}-filter({label})"
     return _Subset(dataset, name=name, indices=indices)
 
 
@@ -355,7 +355,7 @@ def select_classes(
         sorted_names = sorted(str(c) for c in classes)
     else:
         sorted_names = sorted(dataset.class_names[int(c)] for c in classes)
-    suffix = "-select[" + "+".join(sorted_names) + "]"
+    suffix = "-select(" + "+".join(sorted_names) + ")"
     name = f"{dataset.name}{suffix}"
     return _Subset(dataset, name=name, indices=indices)
 
@@ -434,7 +434,7 @@ def mark_as_ood(
         sorted_names = sorted(str(c) for c in classes)
     else:
         sorted_names = sorted(dataset.class_names[int(c)] for c in classes)
-    suffix = "-mark_ood[" + "+".join(sorted_names) + "]"
+    suffix = "-mark_ood(" + "+".join(sorted_names) + ")"
     name = f"{dataset.name}{suffix}"
 
     return _RemappedDataset(
@@ -491,7 +491,7 @@ def hold_out_classes(
         sorted_names = sorted(str(c) for c in classes)
     else:
         sorted_names = sorted(dataset.class_names[int(c)] for c in classes)
-    suffix = "-hold_out[" + "+".join(sorted_names) + "]"
+    suffix = "-hold_out(" + "+".join(sorted_names) + ")"
     name = f"{dataset.name}{suffix}"
     return _Subset(dataset, name=name, indices=indices)
 
@@ -599,7 +599,7 @@ def remap_classes(
     # Build name suffix with mapping entries sorted by key
     sorted_entries = sorted(mapping.items(), key=lambda kv: kv[0])
     parts = [f"{old}={new}" for old, new in sorted_entries]
-    suffix = "-remap[" + "+".join(parts) + "]"
+    suffix = "-remap(" + "+".join(parts) + ")"
     name = f"{dataset.name}{suffix}"
 
     return _RemappedDataset(dataset, remap, new_num_classes, all_names, ignore, name=name)

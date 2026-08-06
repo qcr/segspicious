@@ -20,10 +20,13 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+import segspicious
 from experiments.benchmarking.models import get_models
 from experiments.benchmarking.scenarios import get_scenarios
 from segspicious import load
 from segspicious.metrics import IoU, PixelAccuracy
+
+REPO_ID = "alistair-english/segspicious-checkpoints"
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -96,6 +99,8 @@ def _evaluate_candidate(candidate, scenario) -> dict:
 
 
 def main() -> None:
+    segspicious.configure(repo_id=REPO_ID)
+
     scenarios = get_scenarios()
 
     print(f"=== Evaluating candidates ({len(scenarios)} scenario(s)) ===")

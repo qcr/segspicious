@@ -67,19 +67,23 @@ class Model(Protocol):
         """
         ...
 
-    def save(self, path: Path) -> None:
-        """Serialise learned state to disk.
+    def save(self, directory: Path) -> None:
+        """Serialise learned state to a directory.
 
         Only learned state — the model's configuration (architecture,
         hyperparameters) lives in the class definition itself.
+
+        The model may write any files it needs into *directory*
+        (e.g. ``directory / "weights.pt"``, safetensors, etc.).
+        The framework manages uploading the directory contents.
         """
         ...
 
-    def load(self, path: Path) -> None:
-        """Load learned state from disk.
+    def load(self, directory: Path) -> None:
+        """Load learned state from a directory.
 
         The model object must already exist (constructed with matching
-        class). This mirrors PyTorch's
-        ``model.load_state_dict(torch.load(path))`` pattern.
+        class). *directory* contains whatever files were written by
+        :meth:`save`.
         """
         ...
