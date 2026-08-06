@@ -63,4 +63,10 @@ def get_scenarios() -> list[Scenario]:
             val=Wildscenes2dDataset(WILDSCENES_ROOT, split=Split.VAL),
             test=Wildscenes2dDataset(WILDSCENES_ROOT, split=Split.TEST),
         ),
+        Scenario(
+            name="wildscenes2d_full",
+            train=Wildscenes2dDataset(WILDSCENES_ROOT, split=Split.TRAIN),
+            val=Wildscenes2dDataset(WILDSCENES_ROOT, split=Split.VAL),
+            test=Wildscenes2dDataset(WILDSCENES_ROOT, split=Split.TEST),
+        ),
     ]

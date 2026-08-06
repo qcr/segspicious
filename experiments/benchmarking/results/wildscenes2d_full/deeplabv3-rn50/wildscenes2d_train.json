@@ -1,0 +1,56 @@
+{
+  "metrics": {
+    "iou": {
+      "per_class_iou": [
+        0.0,
+        0.7380112409591675,
+        0.0,
+        0.48100289702415466,
+        0.010825288482010365,
+        0.0,
+        0.604124903678894,
+        0.8609423637390137,
+        0.12972044944763184,
+        0.0,
+        0.451484739780426,
+        3.3011117920977995e-05,
+        0.0,
+        0.2348570078611374,
+        0.3347727954387665,
+        0.4445446729660034,
+        0.8022448420524597,
+        0.6256605386734009
+      ],
+      "mean_iou": 0.31767916679382324
+    },
+    "accuracy": {
+      "pixel_accuracy": 0.860175371170044,
+      "mean_class_accuracy": 0.4138272702693939
+    }
+  },
+  "candidate_name": "deeplabv3-rn50/wildscenes2d_train",
+  "scenario_name": "wildscenes2d_full",
+  "model_name": "deeplabv3-rn50",
+  "train_dataset_name": "wildscenes2d_train",
+  "test_dataset_name": "wildscenes2d_test",
+  "class_names": [
+    "asphalt",
+    "dirt",
+    "mud",
+    "water",
+    "gravel",
+    "other-terrain",
+    "tree-trunk",
+    "tree-foliage",
+    "bush",
+    "fence",
+    "structure",
+    "pole",
+    "vehicle",
+    "rock",
+    "log",
+    "other-object",
+    "sky",
+    "grass"
+  ]
+}
