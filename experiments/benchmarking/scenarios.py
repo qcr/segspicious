@@ -53,16 +53,16 @@ class Scenario:
 def get_scenarios() -> list[Scenario]:
     """Return the list of benchmark scenarios to run."""
     return [
-        Scenario(
-            name="wildscenes2d_subset100",
-            train=subset(
-                Wildscenes2dDataset(WILDSCENES_ROOT, split=Split.TRAIN),
-                n=100,
-                seed=42,
-            ),
-            val=Wildscenes2dDataset(WILDSCENES_ROOT, split=Split.VAL),
-            test=Wildscenes2dDataset(WILDSCENES_ROOT, split=Split.TEST),
-        ),
+        # Scenario(
+        #     name="wildscenes2d_subset100",
+        #     train=subset(
+        #         Wildscenes2dDataset(WILDSCENES_ROOT, split=Split.TRAIN),
+        #         n=100,
+        #         seed=42,
+        #     ),
+        #     val=Wildscenes2dDataset(WILDSCENES_ROOT, split=Split.VAL),
+        #     test=Wildscenes2dDataset(WILDSCENES_ROOT, split=Split.TEST),
+        # ),
         Scenario(
             name="wildscenes2d_full",
             train=Wildscenes2dDataset(WILDSCENES_ROOT, split=Split.TRAIN),

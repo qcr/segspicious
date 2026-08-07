@@ -41,9 +41,7 @@ class _Subset(SegmentationDataset):
         else:
             assert n is not None  # for type checker
             if n > len(dataset):
-                raise ValueError(
-                    f"n={n} exceeds dataset length {len(dataset)}."
-                )
+                raise ValueError(f"n={n} exceeds dataset length {len(dataset)}.")
             rng = random.Random(seed)
             self._indices = rng.sample(range(len(dataset)), n)
 
@@ -91,17 +89,13 @@ class _ConcatDataset(SegmentationDataset):
         for i, ds in enumerate(datasets[1:], 1):
             if ds.num_classes != first.num_classes:
                 raise ValueError(
-                    f"num_classes mismatch: dataset 0 has {first.num_classes}, "
-                    f"dataset {i} has {ds.num_classes}."
+                    f"num_classes mismatch: dataset 0 has {first.num_classes}, dataset {i} has {ds.num_classes}."
                 )
             if ds.all_class_names != first.all_class_names:
-                raise ValueError(
-                    f"class_names mismatch between dataset 0 and dataset {i}."
-                )
+                raise ValueError(f"class_names mismatch between dataset 0 and dataset {i}.")
             if ds.ignore_index != first.ignore_index:
                 raise ValueError(
-                    f"ignore_index mismatch: dataset 0 has {first.ignore_index}, "
-                    f"dataset {i} has {ds.ignore_index}."
+                    f"ignore_index mismatch: dataset 0 has {first.ignore_index}, dataset {i} has {ds.ignore_index}."
                 )
 
         self._name = name
@@ -298,11 +292,7 @@ def filter_by_labels(
         label: Human-readable description of what the predicate does.
             Used in the dataset name suffix.
     """
-    indices = [
-        i
-        for i in range(len(dataset))
-        if predicate(dataset.get_labels(i))
-    ]
+    indices = [i for i in range(len(dataset)) if predicate(dataset.get_labels(i))]
     name = f"{dataset.name}-filter({label})"
     return _Subset(dataset, name=name, indices=indices)
 
@@ -328,28 +318,16 @@ def select_classes(
 
     if isinstance(classes[0], str):
         try:
-            class_indices = frozenset(
-                dataset.class_names.index(str(c)) for c in classes
-            )
+            class_indices = frozenset(dataset.class_names.index(str(c)) for c in classes)
         except ValueError as e:
-            raise ValueError(
-                f"Class name not found in dataset: {e}. "
-                f"Available: {dataset.class_names}"
-            ) from e
+            raise ValueError(f"Class name not found in dataset: {e}. Available: {dataset.class_names}") from e
     else:
         class_indices = frozenset(int(c) for c in classes)
         for idx in class_indices:
             if idx < 0 or idx >= dataset.num_classes:
-                raise ValueError(
-                    f"Class index {idx} out of range "
-                    f"[0, {dataset.num_classes})."
-                )
+                raise ValueError(f"Class index {idx} out of range [0, {dataset.num_classes}).")
 
-    indices = [
-        i
-        for i in range(len(dataset))
-        if class_indices & dataset.get_classes_present(i)
-    ]
+    indices = [i for i in range(len(dataset)) if class_indices & dataset.get_classes_present(i)]
     # Build name suffix with sorted class names
     if isinstance(classes[0], str):
         sorted_names = sorted(str(c) for c in classes)
@@ -389,26 +367,16 @@ def mark_as_ood(
         ood_names = set(str(c) for c in classes)
         for name in ood_names:
             if name not in dataset.class_names:
-                raise ValueError(
-                    f"Class name {name!r} not found in dataset. "
-                    f"Available: {dataset.class_names}"
-                )
-        ood_indices = frozenset(
-            dataset.class_names.index(n) for n in ood_names
-        )
+                raise ValueError(f"Class name {name!r} not found in dataset. Available: {dataset.class_names}")
+        ood_indices = frozenset(dataset.class_names.index(n) for n in ood_names)
     else:
         ood_indices = frozenset(int(c) for c in classes)
         for idx in ood_indices:
             if idx < 0 or idx >= dataset.num_classes:
-                raise ValueError(
-                    f"Class index {idx} out of range "
-                    f"[0, {dataset.num_classes})."
-                )
+                raise ValueError(f"Class index {idx} out of range [0, {dataset.num_classes}).")
 
     # Derive kept classes (preserving original order) ----------------------
-    keep_indices = [
-        i for i in range(dataset.num_classes) if i not in ood_indices
-    ]
+    keep_indices = [i for i in range(dataset.num_classes) if i not in ood_indices]
     n = len(keep_indices)
     keep_names = tuple(dataset.all_class_names[i] for i in keep_indices)
     newly_ood_names = tuple(dataset.all_class_names[i] for i in sorted(ood_indices))
@@ -437,9 +405,7 @@ def mark_as_ood(
     suffix = "-mark_ood(" + "+".join(sorted_names) + ")"
     name = f"{dataset.name}{suffix}"
 
-    return _RemappedDataset(
-        dataset, remap, n, all_names, dataset.ignore_index, name=name
-    )
+    return _RemappedDataset(dataset, remap, n, all_names, dataset.ignore_index, name=name)
 
 
 def hold_out_classes(
@@ -464,28 +430,16 @@ def hold_out_classes(
 
     if isinstance(classes[0], str):
         try:
-            class_indices = frozenset(
-                dataset.class_names.index(str(c)) for c in classes
-            )
+            class_indices = frozenset(dataset.class_names.index(str(c)) for c in classes)
         except ValueError as e:
-            raise ValueError(
-                f"Class name not found in dataset: {e}. "
-                f"Available: {dataset.class_names}"
-            ) from e
+            raise ValueError(f"Class name not found in dataset: {e}. Available: {dataset.class_names}") from e
     else:
         class_indices = frozenset(int(c) for c in classes)
         for idx in class_indices:
             if idx < 0 or idx >= dataset.num_classes:
-                raise ValueError(
-                    f"Class index {idx} out of range "
-                    f"[0, {dataset.num_classes})."
-                )
+                raise ValueError(f"Class index {idx} out of range [0, {dataset.num_classes}).")
 
-    indices = [
-        i
-        for i in range(len(dataset))
-        if not (class_indices & dataset.get_classes_present(i))
-    ]
+    indices = [i for i in range(len(dataset)) if not (class_indices & dataset.get_classes_present(i))]
     # Build name suffix with sorted class names
     if isinstance(classes[0], str):
         sorted_names = sorted(str(c) for c in classes)
@@ -513,15 +467,193 @@ def hold_out_ood(
     num_cls = dataset.num_classes
     ignore = dataset.ignore_index
     indices = [
-        i
-        for i in range(len(dataset))
-        if not any(
-            c >= num_cls and c != ignore
-            for c in dataset.get_classes_present(i)
-        )
+        i for i in range(len(dataset)) if not any(c >= num_cls and c != ignore for c in dataset.get_classes_present(i))
     ]
     name = f"{dataset.name}-hold_out_ood"
     return _Subset(dataset, name=name, indices=indices)
+
+
+def coverage_subset(
+    dataset: SegmentationDataset,
+    n: int,
+) -> SegmentationDataset:
+    """Greedy set-cover subset that maximises class coverage.
+
+    Iteratively picks the image that covers the most not-yet-represented
+    classes.  Ties are broken by the total number of classes present
+    (more is better).  Uses only :meth:`get_classes_present` — fast,
+    no pixel data loaded.
+
+    Deterministic (no randomness).
+
+    Args:
+        dataset: Source dataset.
+        n: Number of images to select.
+
+    Returns:
+        A subset of the dataset with at most *n* images.
+    """
+    if n > len(dataset):
+        raise ValueError(f"n={n} exceeds dataset length {len(dataset)}.")
+
+    indices = _coverage_phase(dataset, n)
+    name = f"{dataset.name}-coverage_subset(n={n})"
+    return _Subset(dataset, name=name, indices=indices)
+
+
+def balanced_subset(
+    dataset: SegmentationDataset,
+    n: int,
+) -> SegmentationDataset:
+    """Class-balanced subset: coverage phase + pixel-count balancing.
+
+    Phase 1 (coverage): identical to :func:`coverage_subset` — greedy
+    set-cover using :meth:`get_classes_present`.
+
+    Phase 2 (balance): fills the remaining budget by picking images that
+    contribute the most pixels to the least-represented class.  Uses
+    :meth:`get_labels` to count pixels per class — only called on
+    candidates not yet selected, only during this phase.
+
+    Deterministic.
+
+    Args:
+        dataset: Source dataset.
+        n: Number of images to select.
+
+    Returns:
+        A subset of the dataset with at most *n* images.
+    """
+    if n > len(dataset):
+        raise ValueError(f"n={n} exceeds dataset length {len(dataset)}.")
+
+    num_classes = dataset.num_classes
+    ignore_index = dataset.ignore_index
+
+    # Phase 1: coverage
+    selected = _coverage_phase(dataset, n)
+    selected_set = set(selected)
+
+    # Phase 2: pixel-count balancing
+    # Build pixel profiles for selected images
+    profiles: dict[int, list[int]] = {}  # idx -> per-class pixel counts
+    for idx in selected:
+        profiles[idx] = _pixel_profile(dataset, idx, num_classes, ignore_index)
+
+    while len(selected) < n:
+        # Current pixel totals per class across selected images
+        current_totals = [0] * num_classes
+        for idx in selected:
+            for c in range(num_classes):
+                current_totals[c] += profiles[idx][c]
+
+        best_idx = -1
+        best_score = -1.0
+
+        for i in range(len(dataset)):
+            if i in selected_set:
+                continue
+            # Lazily compute profile for this candidate
+            if i not in profiles:
+                profiles[i] = _pixel_profile(dataset, i, num_classes, ignore_index)
+
+            # Score: prioritise uncovered classes heavily, then weight by
+            # inverse of current representation
+            score = 0.0
+            for c in range(num_classes):
+                px = profiles[i][c]
+                if px == 0:
+                    continue
+                if current_totals[c] == 0:
+                    score += px * 1000
+                else:
+                    score += px / current_totals[c]
+
+            if score > best_score:
+                best_score = score
+                best_idx = i
+
+        if best_idx < 0:
+            break
+
+        selected.append(best_idx)
+        selected_set.add(best_idx)
+
+    name = f"{dataset.name}-balanced_subset(n={n})"
+    return _Subset(dataset, name=name, indices=selected)
+
+
+def _coverage_phase(
+    dataset: SegmentationDataset,
+    n: int,
+) -> list[int]:
+    """Greedy set-cover: pick images to maximise class coverage."""
+    num_classes = dataset.num_classes
+    selected: list[int] = []
+    selected_set: set[int] = set()
+    covered_classes: set[int] = set()
+
+    # Pre-fetch classes present for all images
+    all_classes = [dataset.get_classes_present(i) for i in range(len(dataset))]
+
+    while len(selected) < n and len(covered_classes) < num_classes:
+        best_idx = -1
+        best_new_count = -1
+        best_total_count = -1
+
+        for i in range(len(dataset)):
+            if i in selected_set:
+                continue
+            present = all_classes[i]
+            # Only consider valid in-distribution classes
+            id_present = frozenset(c for c in present if c < num_classes)
+            new_classes = id_present - covered_classes
+            new_count = len(new_classes)
+            total_count = len(id_present)
+
+            if new_count > best_new_count or (new_count == best_new_count and total_count > best_total_count):
+                best_idx = i
+                best_new_count = new_count
+                best_total_count = total_count
+
+        if best_idx < 0:
+            break
+
+        selected.append(best_idx)
+        selected_set.add(best_idx)
+        id_present = frozenset(c for c in all_classes[best_idx] if c < num_classes)
+        covered_classes.update(id_present)
+
+    # If we still have budget but all classes are covered, fill greedily
+    # by total class count (most diverse images first)
+    if len(selected) < n:
+        remaining = [i for i in range(len(dataset)) if i not in selected_set]
+        # Sort by number of ID classes present, descending
+        remaining.sort(
+            key=lambda i: len(frozenset(c for c in all_classes[i] if c < num_classes)),
+            reverse=True,
+        )
+        for i in remaining:
+            if len(selected) >= n:
+                break
+            selected.append(i)
+            selected_set.add(i)
+
+    return selected
+
+
+def _pixel_profile(
+    dataset: SegmentationDataset,
+    index: int,
+    num_classes: int,
+    ignore_index: int,
+) -> list[int]:
+    """Count pixels per in-distribution class for one sample."""
+    labels = dataset.get_labels(index)
+    counts = [0] * num_classes
+    for c in range(num_classes):
+        counts[c] = int((labels == c).sum().item())
+    return counts
 
 
 def remap_classes(
@@ -561,8 +693,7 @@ def remap_classes(
             old_idx = dataset.class_names.index(old_name)
         except ValueError:
             raise ValueError(
-                f"Class name {old_name!r} not found in dataset. "
-                f"Available: {dataset.class_names}"
+                f"Class name {old_name!r} not found in dataset. Available: {dataset.class_names}"
             ) from None
         if new_name not in new_name_to_idx:
             new_name_to_idx[new_name] = len(new_names)
@@ -606,7 +737,9 @@ def remap_classes(
 
 
 __all__ = [
+    "balanced_subset",
     "concat_datasets",
+    "coverage_subset",
     "filter_by_labels",
     "filter_samples",
     "hold_out_classes",

@@ -1,0 +1,56 @@
+{
+  "metrics": {
+    "iou": {
+      "per_class_iou": [
+        0.0,
+        0.695337176322937,
+        0.009026914834976196,
+        0.47497260570526123,
+        0.011967143975198269,
+        0.0,
+        0.15071788430213928,
+        0.77162104845047,
+        0.11803841590881348,
+        0.04611597955226898,
+        0.025726918131113052,
+        0.0,
+        0.366945743560791,
+        0.16281457245349884,
+        0.3054296374320984,
+        0.09153171628713608,
+        0.6065587401390076,
+        0.5552269220352173
+      ],
+      "mean_iou": 0.24400173127651215
+    },
+    "accuracy": {
+      "pixel_accuracy": 0.7761499881744385,
+      "mean_class_accuracy": 0.35646551847457886
+    }
+  },
+  "candidate_name": "pastel-dinov2-vitl14-n20/wildscenes2d_train",
+  "scenario_name": "wildscenes2d_full",
+  "model_name": "pastel-dinov2-vitl14-n20",
+  "train_dataset_name": "wildscenes2d_train",
+  "test_dataset_name": "wildscenes2d_test",
+  "class_names": [
+    "asphalt",
+    "dirt",
+    "mud",
+    "water",
+    "gravel",
+    "other-terrain",
+    "tree-trunk",
+    "tree-foliage",
+    "bush",
+    "fence",
+    "structure",
+    "pole",
+    "vehicle",
+    "rock",
+    "log",
+    "other-object",
+    "sky",
+    "grass"
+  ]
+}

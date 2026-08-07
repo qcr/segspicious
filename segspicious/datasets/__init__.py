@@ -3,7 +3,9 @@
 from segspicious.datasets.base import SegmentationDataset, Split
 from segspicious.datasets.cache import ClassIndexCache
 from segspicious.datasets.modifiers import (
+    balanced_subset,
     concat_datasets,
+    coverage_subset,
     filter_by_labels,
     filter_samples,
     hold_out_classes,
@@ -18,7 +20,9 @@ __all__ = [
     "ClassIndexCache",
     "SegmentationDataset",
     "Split",
+    "balanced_subset",
     "concat_datasets",
+    "coverage_subset",
     "filter_by_labels",
     "filter_samples",
     "hold_out_classes",

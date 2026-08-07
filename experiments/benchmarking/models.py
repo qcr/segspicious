@@ -6,11 +6,12 @@ so they can be independently trained or loaded without shared state.
 
 from __future__ import annotations
 
-from experiments.models import DeepLabV3RN50
+from experiments.models import DeepLabV3RN50, PastelDINOv2_N20
 
 
 def get_models() -> list:
     """Return fresh model instances for benchmarking."""
     return [
         DeepLabV3RN50(),
+        PastelDINOv2_N20(),
     ]
