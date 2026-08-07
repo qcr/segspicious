@@ -47,6 +47,8 @@ The model author knows what their method measures. The experiment trusts that la
 
 Each test declares which output fields it accepts. All metrics use torchmetrics and torch-uncertainty.metrics, which accumulate across batches via `.update()` / `.compute()`. The experiment script is responsible for checking which fields a model provides and routing them to the appropriate metrics.
 
+All evaluation is **pixel-level**. See `uncertainty_metrics_recommendations.md` for full rationale.
+
 ### OoD Detection
 
 Separates in-distribution pixels from out-of-distribution pixels. OoD ground truth is encoded in the label tensor: pixels with `label >= num_classes` are OoD (see `experiment_design.md`). The experiment script derives binary OoD targets from this convention and passes `(ood_scores, binary_labels)` to the metrics.
@@ -62,26 +64,39 @@ Runs independently for each populated field — a model with both `epistemic_unc
 
 The torch-uncertainty segmentation OoD metrics are **image-averaged**: AUROC / FPR95 is computed per image then averaged across the batch. This is the convention in the dense OoD-detection literature and behaves better than computing over flattened pixels when image sizes or OoD prevalences vary.
 
-### Failure Detection
+### Acceptance Risk
 
-Detects pixels where the model's prediction is wrong.
+Joint evaluation of both failure modes: misclassified in-distribution pixels and undetected out-of-distribution pixels. OoD detection and selective prediction evaluate these separately — acceptance risk asks how well a single score handles both at once.
+
+The cost function assigns a per-pixel loss depending on the outcome:
+
+- ID, correct prediction → 0
+- ID, wrong prediction → 1 − c_OOD
+- OoD → c_OOD
+
+The `c_OOD` parameter (default 0.5) controls the relative cost of accepting an OoD pixel vs accepting a misclassified ID pixel. Pixels are ranked by score and a risk-coverage curve is built using this blended cost, then summarised as AURC.
+
+Requires images containing both ID and OoD pixels with ground truth class labels for the ID pixels.
 
 | | |
 |---|---|
-| **Accepts** | `predictive_uncertainty`, `aleatoric_uncertainty`, `epistemic_uncertainty`, `ood_score` |
-| **Ground truth** | Class labels `(B, H, W)` (binary error mask derived from `prediction ≠ label`) |
-| **Metrics** | AUROC, AUPR, FPR@95TPR |
+| **Accepts** | `predictive_uncertainty`, `epistemic_uncertainty`, `ood_score` |
+| **Ground truth** | Class labels `(B, H, W)` + OoD labels derived from `label >= num_classes` |
+| **Metrics** | SCOD-AURC |
+| **Implementation** | Adapted from `torch-uncertainty` `SCODAURC` (pixel-level, image-averaged) |
 
-### Selective Prediction (Risk-Coverage)
+Runs independently for each populated field. The experiment script derives `classification_errors` from `prediction` vs ground truth on ID pixels, and binary OoD labels from the label tensor.
 
-Measures accuracy improvement when the model abstains on uncertain pixels.
+### Selective Prediction (Sparsification)
+
+Measures whether removing uncertain pixels actually removes errors.
 
 | | |
 |---|---|
 | **Accepts** | `predictive_uncertainty`, `aleatoric_uncertainty`, `epistemic_uncertainty`, `ood_score` |
 | **Ground truth** | Class labels `(B, H, W)` |
-| **Metrics** | AURC, E-AURC |
-| **Implementation** | `torch-uncertainty` `AURC`, `AUGRC` |
+| **Metrics** | AUSE |
+| **Implementation** | `torch-uncertainty` `AUSE` |
 
 ### Calibration
 
@@ -91,18 +106,8 @@ Evaluates whether predicted probabilities match empirical correctness frequency.
 |---|---|
 | **Accepts** | `class_probs` |
 | **Ground truth** | Class labels `(B, H, W)` |
-| **Metrics** | ECE, classwise-ECE, Brier score, NLL |
-| **Implementation** | `torchmetrics` `CalibrationError`, `torch-uncertainty` `BrierScore`, `CategoricalNLL` |
-
-### Active Learning
-
-Evaluates whether uncertainty scores identify the most informative samples to label.
-
-| | |
-|---|---|
-| **Accepts** | `predictive_uncertainty`, `epistemic_uncertainty`, `ood_score` |
-| **Ground truth** | Evaluated indirectly via learning curves after retraining |
-| **Metrics** | Learning curve AUC, performance at fixed budget |
+| **Metrics** | ACE |
+| **Implementation** | `torch-uncertainty` `AdaptiveCalibrationError` |
 
 ## Model Examples
 
@@ -153,14 +158,14 @@ DDU:
 A typical experiment might produce a table of candidates (model × dataset) against (test, field) pairs:
 
 ```
-                     OoD     OoD     OoD    Fail    Fail     Calib   ...
-                    (pred)  (epist) (ood)  (pred)  (aleat)  (probs)
-Softmax Baseline     0.81     -       -     0.74     -       0.12
-Energy Score          -       -      0.85     -       -        -
-Deep Ensemble        0.83    0.91     -     0.79    0.68     0.04
-Evidential           0.80    0.86   0.88    0.76    0.65     0.06
-Mahalanobis           -       -     0.92     -       -        -
-DDU                  0.82     -     0.90    0.75     -       0.05
+                     OoD     OoD     OoD    AccRisk AccRisk AccRisk  Fail    Fail     Calib
+                    (pred)  (epist) (ood)  (pred)  (epist) (ood)   (pred)  (aleat)  (probs)
+Softmax Baseline     0.81     -       -     0.14     -       -      0.74     -       0.12
+Energy Score          -       -      0.85     -       -     0.11      -       -        -
+Deep Ensemble        0.83    0.91     -     0.12    0.09     -      0.79    0.68     0.04
+Evidential           0.80    0.86   0.88    0.13    0.10   0.09     0.76    0.65     0.06
+Mahalanobis           -       -     0.92     -       -     0.08      -       -        -
+DDU                  0.82     -     0.90    0.13     -     0.09     0.75     -       0.05
 ```
 
 Empty cells are documented incompatibilities, not missing data. How results are collected and displayed is up to the experiment script.
